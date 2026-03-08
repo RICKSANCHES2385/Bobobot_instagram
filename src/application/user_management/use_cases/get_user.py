@@ -1,7 +1,9 @@
 """Get User Use Case."""
 
+from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
+
 from src.domain.user_management.value_objects.user_id import UserId
-from src.domain.user_management.repositories.user_repository import IUserRepository
+from src.infrastructure.persistence.repositories.sqlalchemy_user_repository import SQLAlchemyUserRepository
 from src.domain.user_management.entities.user import User
 from src.application.user_management.dtos.user_dto import UserDTO
 
@@ -9,13 +11,13 @@ from src.application.user_management.dtos.user_dto import UserDTO
 class GetUserUseCase:
     """Use case for getting user by ID."""
 
-    def __init__(self, user_repository: IUserRepository):
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession]):
         """Initialize use case.
         
         Args:
-            user_repository: User repository
+            session_factory: SQLAlchemy session factory
         """
-        self._user_repository = user_repository
+        self._session_factory = session_factory
 
     async def execute(self, user_id: str) -> UserDTO:
         """Execute use case.
@@ -29,12 +31,14 @@ class GetUserUseCase:
         Raises:
             ValueError: If user not found
         """
-        user = await self._user_repository.find_by_id(UserId(user_id))
+        async with self._session_factory() as session:
+            user_repository = SQLAlchemyUserRepository(session)
+            user = await user_repository.find_by_id(UserId(int(user_id)))
 
-        if user is None:
-            raise ValueError(f"User {user_id} not found")
+            if user is None:
+                raise ValueError(f"User {user_id} not found")
 
-        return self._to_dto(user)
+            return self._to_dto(user)
 
     @staticmethod
     def _to_dto(user: User) -> UserDTO:

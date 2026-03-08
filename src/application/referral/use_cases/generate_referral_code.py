@@ -8,7 +8,7 @@ from src.application.referral.dtos import GenerateReferralCodeDTO
 from src.domain.referral.aggregates.referral import Referral
 from src.domain.referral.repositories.referral_repository import ReferralRepository
 from src.domain.referral.value_objects.referral_code import ReferralCode
-from src.domain.shared.value_objects.currency import Currency
+from src.domain.shared.value_objects.money import Currency
 
 
 class GenerateReferralCodeUseCase:

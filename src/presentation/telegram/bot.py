@@ -103,21 +103,17 @@ class TelegramBot:
         # Initialize tracking checker
         self.tracking_checker = TrackingChecker(
             bot=self.bot,
-            session_factory=self.session_factory,
-            check_interval_minutes=5,  # Check every 5 minutes
+            check_interval_seconds=300,  # Check every 5 minutes
         )
         
         # Initialize notification sender
         self.notification_sender = NotificationSender(
             bot=self.bot,
-            session_factory=self.session_factory,
-            send_interval_seconds=10,  # Send every 10 seconds
         )
         
         # Initialize cleanup tasks
         self.cleanup_tasks = CleanupTasks(
-            session_factory=self.session_factory,
-            cleanup_interval_hours=24,  # Cleanup every 24 hours
+            cleanup_interval_seconds=86400,  # Cleanup every 24 hours
         )
         
         logger.info("Background tasks initialized")

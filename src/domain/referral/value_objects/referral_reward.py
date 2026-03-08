@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from src.domain.referral.exceptions import InvalidRewardAmountError
-from src.domain.shared.value_objects.currency import Currency
+from src.domain.shared.value_objects.money import Currency
 
 
 @dataclass(frozen=True)

@@ -21,6 +21,35 @@ from src.presentation.telegram.media.media_sender import MediaSender
 logger = get_logger(__name__)
 
 
+async def check_rate_limit(user_id: int, callback: Optional[CallbackQuery] = None, message: Optional[Message] = None) -> bool:
+    """Check rate limits for user.
+    
+    Args:
+        user_id: Telegram user ID
+        callback: Callback query to answer (optional)
+        message: Message to reply to (optional)
+        
+    Returns:
+        True if allowed, False if rate limited
+    """
+    try:
+        container = get_container()
+        rate_limit = container.get_rate_limit_service()
+        ok, error_msg = await rate_limit.check_limits(user_id)
+        
+        if not ok:
+            if callback:
+                await callback.answer(error_msg, show_alert=True)
+            elif message:
+                await message.answer(error_msg)
+            return False
+        
+        return True
+    except Exception as e:
+        logger.error(f"Rate limit check error: {e}")
+        return True  # Allow on error
+
+
 def parse_instagram_username(text: str) -> Optional[str]:
     """Parse Instagram username from text or URL."""
     # Remove @ prefix
@@ -114,9 +143,20 @@ async def instagram_profile_handler(message: Message) -> None:
     user_id = message.from_user.id
     logger.info(f"User {user_id} requested profile: {username}")
     
-    # Get use cases
+    # Get container
     container = get_container()
     use_cases = container.get_use_cases()
+    
+    # Check rate limits
+    try:
+        rate_limit = container.get_rate_limit_service()
+        ok, error_msg = await rate_limit.check_limits(user_id)
+        if not ok:
+            await message.answer(error_msg)
+            return
+    except Exception as e:
+        logger.error(f"Rate limit check error: {e}")
+        # Continue anyway
     
     try:
         # Check subscription status
@@ -192,6 +232,10 @@ async def handle_stories(callback: CallbackQuery) -> None:
         return
 
     await callback.answer()
+    
+    # Check rate limits
+    if not await check_rate_limit(callback.from_user.id, callback=callback):
+        return
 
     parts = callback.data.split("_", 3)
     if len(parts) < 4:
@@ -285,13 +329,17 @@ async def handle_stories(callback: CallbackQuery) -> None:
 
 async def handle_stories_next(callback: CallbackQuery) -> None:
     """Handle next batch of stories."""
-    if not callback.data or not callback.from_user:
+    if not callback.data or not callback.from_user or not callback.message:
         return
 
     await callback.answer()
+    
+    # Check rate limits
+    if not await check_rate_limit(callback.from_user.id, callback=callback):
+        return
 
     # Parse: ig_stories_next_{user_id}_{username}_{offset}
-    parts = callback.data.split("_", 4)
+    parts = callback.data.split("_")
     if len(parts) < 5:
         await callback.answer("❌ Ошибка данных", show_alert=True)
         return
@@ -302,8 +350,77 @@ async def handle_stories_next(callback: CallbackQuery) -> None:
 
     logger.info(f"Fetching next stories for {username} (offset={offset})")
 
-    # TODO: Load next batch
-    await callback.answer("Загружаю следующие истории...")
+    # Get use cases
+    container = get_container()
+    use_cases = container.get_use_cases()
+
+    try:
+        # Fetch stories again (they should be cached)
+        profile = await use_cases.fetch_instagram_profile.execute(username)
+        command = FetchInstagramStoriesCommand(username=username, user_id=profile.user_id)
+        stories = await use_cases.fetch_instagram_stories.execute(command)
+        
+        if not stories or offset >= len(stories):
+            await callback.answer("Больше нет историй", show_alert=True)
+            return
+        
+        # Get next batch (3 stories)
+        batch_size = 3
+        next_batch = stories[offset:offset + batch_size]
+        
+        # Create media handlers
+        from src.presentation.telegram.formatters.content_formatter import format_story_caption
+        media_downloader = MediaDownloader()
+        media_sender = MediaSender(callback.message.bot)
+        
+        for story in next_batch:
+            caption = format_story_caption(story, username)
+            
+            try:
+                file_path = await media_downloader.download_media(story.media_url, story.media_type)
+                if file_path:
+                    await media_sender.send_media(
+                        callback.message,
+                        file_path,
+                        story.media_type,
+                        caption
+                    )
+                else:
+                    await callback.message.answer(caption)
+            except Exception as e:
+                logger.error(f"Error sending story media: {e}")
+                await callback.message.answer(caption)
+        
+        # Show "Load more" button if there are more stories
+        new_offset = offset + batch_size
+        if new_offset < len(stories):
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(
+                    text=f"📖 Загрузить ещё ({len(stories) - new_offset})",
+                    callback_data=f"ig_stories_next_{user_id}_{username}_{new_offset}"
+                )],
+                [InlineKeyboardButton(
+                    text="◀️ Назад к профилю",
+                    callback_data=f"ig_back_{user_id}_{username}"
+                )]
+            ])
+            await callback.message.answer(
+                f"Показано {new_offset} из {len(stories)} историй",
+                reply_markup=keyboard
+            )
+        else:
+            await callback.message.answer(
+                "Все истории загружены! 🥳",
+                reply_markup=get_back_to_profile_keyboard(user_id, username)
+            )
+            
+    except Exception as e:
+        logger.error(f"Error fetching next stories for {username}: {e}")
+        await callback.message.answer(
+            f"❌ Не удалось загрузить истории\n\n"
+            "Попробуйте позже",
+            reply_markup=get_back_to_profile_keyboard(user_id, username)
+        )
 
 
 async def handle_posts(callback: CallbackQuery) -> None:
@@ -312,6 +429,10 @@ async def handle_posts(callback: CallbackQuery) -> None:
         return
 
     await callback.answer()
+    
+    # Check rate limits
+    if not await check_rate_limit(callback.from_user.id, callback=callback):
+        return
 
     parts = callback.data.split("_", 3)
     if len(parts) < 4:
@@ -425,13 +546,17 @@ async def handle_posts(callback: CallbackQuery) -> None:
 
 async def handle_posts_next(callback: CallbackQuery) -> None:
     """Handle next batch of posts."""
-    if not callback.data or not callback.from_user:
+    if not callback.data or not callback.from_user or not callback.message:
         return
 
     await callback.answer()
+    
+    # Check rate limits
+    if not await check_rate_limit(callback.from_user.id, callback=callback):
+        return
 
     # Parse: ig_posts_next_{user_id}_{username}_{offset}
-    parts = callback.data.split("_", 4)
+    parts = callback.data.split("_")
     if len(parts) < 5:
         await callback.answer("❌ Ошибка данных", show_alert=True)
         return
@@ -442,8 +567,104 @@ async def handle_posts_next(callback: CallbackQuery) -> None:
 
     logger.info(f"Fetching next posts for {username} (offset={offset})")
 
-    # TODO: Load next batch
-    await callback.answer("Загружаю следующие публикации...")
+    # Get use cases
+    container = get_container()
+    use_cases = container.get_use_cases()
+
+    try:
+        # Fetch posts again (they should be cached)
+        profile = await use_cases.fetch_instagram_profile.execute(username)
+        command = FetchInstagramPostsCommand(username=username, user_id=profile.user_id, cursor=None)
+        result = await use_cases.fetch_instagram_posts.execute(command)
+        posts = result.posts
+        
+        if not posts or offset >= len(posts):
+            await callback.answer("Больше нет публикаций", show_alert=True)
+            return
+        
+        # Get next batch (5 posts)
+        batch_size = 5
+        next_batch = posts[offset:offset + batch_size]
+        
+        # Create media handlers
+        from src.presentation.telegram.formatters.content_formatter import format_post_caption
+        media_downloader = MediaDownloader()
+        media_sender = MediaSender(callback.message.bot)
+        
+        for post in next_batch:
+            caption = format_post_caption(post, username)
+            
+            # Handle carousel (multiple media)
+            if post.carousel_media and len(post.carousel_media) > 1:
+                # Send as media group
+                try:
+                    await media_sender.send_media_group(
+                        callback.message,
+                        post.carousel_media,
+                        caption
+                    )
+                except Exception as e:
+                    logger.error(f"Error sending media group: {e}")
+                    # Fallback to single media
+                    try:
+                        file_path = await media_downloader.download_media(post.media_url, post.media_type)
+                        if file_path:
+                            await media_sender.send_media(
+                                callback.message,
+                                file_path,
+                                post.media_type,
+                                caption
+                            )
+                    except Exception as e2:
+                        logger.error(f"Error sending fallback media: {e2}")
+                        await callback.message.answer(caption)
+            else:
+                # Single media
+                try:
+                    file_path = await media_downloader.download_media(post.media_url, post.media_type)
+                    if file_path:
+                        await media_sender.send_media(
+                            callback.message,
+                            file_path,
+                            post.media_type,
+                            caption
+                        )
+                    else:
+                        await callback.message.answer(caption)
+                except Exception as e:
+                    logger.error(f"Error sending post media: {e}")
+                    await callback.message.answer(caption)
+        
+        # Show "Load more" button if there are more posts
+        new_offset = offset + batch_size
+        if new_offset < len(posts):
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(
+                    text=f"📷 Загрузить ещё ({len(posts) - new_offset})",
+                    callback_data=f"ig_posts_next_{user_id}_{username}_{new_offset}"
+                )],
+                [InlineKeyboardButton(
+                    text="◀️ Назад к профилю",
+                    callback_data=f"ig_back_{user_id}_{username}"
+                )]
+            ])
+            await callback.message.answer(
+                f"Показано {new_offset} из {len(posts)} публикаций",
+                reply_markup=keyboard
+            )
+        else:
+            await callback.message.answer(
+                "Все публикации загружены! 🥳",
+                reply_markup=get_back_to_profile_keyboard(user_id, username)
+            )
+            
+    except Exception as e:
+        logger.error(f"Error fetching next posts for {username}: {e}")
+        await callback.message.answer(
+            f"❌ Не удалось загрузить публикации\n\n"
+            "Попробуйте позже",
+            reply_markup=get_back_to_profile_keyboard(user_id, username)
+        )
 
 
 async def handle_reels(callback: CallbackQuery) -> None:
@@ -452,6 +673,10 @@ async def handle_reels(callback: CallbackQuery) -> None:
         return
 
     await callback.answer()
+    
+    # Check rate limits
+    if not await check_rate_limit(callback.from_user.id, callback=callback):
+        return
 
     parts = callback.data.split("_", 3)
     if len(parts) < 4:
@@ -545,13 +770,17 @@ async def handle_reels(callback: CallbackQuery) -> None:
 
 async def handle_reels_next(callback: CallbackQuery) -> None:
     """Handle next batch of reels."""
-    if not callback.data or not callback.from_user:
+    if not callback.data or not callback.from_user or not callback.message:
         return
 
     await callback.answer()
+    
+    # Check rate limits
+    if not await check_rate_limit(callback.from_user.id, callback=callback):
+        return
 
     # Parse: ig_reels_next_{user_id}_{username}_{offset}
-    parts = callback.data.split("_", 4)
+    parts = callback.data.split("_")
     if len(parts) < 5:
         await callback.answer("❌ Ошибка данных", show_alert=True)
         return
@@ -562,8 +791,78 @@ async def handle_reels_next(callback: CallbackQuery) -> None:
 
     logger.info(f"Fetching next reels for {username} (offset={offset})")
 
-    # TODO: Load next batch
-    await callback.answer("Загружаю следующие reels...")
+    # Get use cases
+    container = get_container()
+    use_cases = container.get_use_cases()
+
+    try:
+        # Fetch reels again (they should be cached)
+        profile = await use_cases.fetch_instagram_profile.execute(username)
+        command = FetchInstagramReelsCommand(username=username, user_id=profile.user_id, cursor=None)
+        result = await use_cases.fetch_instagram_reels.execute(command)
+        reels = result.reels
+        
+        if not reels or offset >= len(reels):
+            await callback.answer("Больше нет reels", show_alert=True)
+            return
+        
+        # Get next batch (3 reels)
+        batch_size = 3
+        next_batch = reels[offset:offset + batch_size]
+        
+        # Create media handlers
+        from src.presentation.telegram.formatters.content_formatter import format_reel_caption
+        media_downloader = MediaDownloader()
+        media_sender = MediaSender(callback.message.bot)
+        
+        for reel in next_batch:
+            caption = format_reel_caption(reel, username)
+            
+            try:
+                file_path = await media_downloader.download_media(reel.media_url, reel.media_type)
+                if file_path:
+                    await media_sender.send_media(
+                        callback.message,
+                        file_path,
+                        reel.media_type,
+                        caption
+                    )
+                else:
+                    await callback.message.answer(caption)
+            except Exception as e:
+                logger.error(f"Error sending reel media: {e}")
+                await callback.message.answer(caption)
+        
+        # Show "Load more" button if there are more reels
+        new_offset = offset + batch_size
+        if new_offset < len(reels):
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(
+                    text=f"🎬 Загрузить ещё ({len(reels) - new_offset})",
+                    callback_data=f"ig_reels_next_{user_id}_{username}_{new_offset}"
+                )],
+                [InlineKeyboardButton(
+                    text="◀️ Назад к профилю",
+                    callback_data=f"ig_back_{user_id}_{username}"
+                )]
+            ])
+            await callback.message.answer(
+                f"Показано {new_offset} из {len(reels)} reels",
+                reply_markup=keyboard
+            )
+        else:
+            await callback.message.answer(
+                "Все reels загружены! 🥳",
+                reply_markup=get_back_to_profile_keyboard(user_id, username)
+            )
+            
+    except Exception as e:
+        logger.error(f"Error fetching next reels for {username}: {e}")
+        await callback.message.answer(
+            f"❌ Не удалось загрузить reels\n\n"
+            "Попробуйте позже",
+            reply_markup=get_back_to_profile_keyboard(user_id, username)
+        )
 
 
 async def handle_highlights(callback: CallbackQuery) -> None:
@@ -572,6 +871,10 @@ async def handle_highlights(callback: CallbackQuery) -> None:
         return
 
     await callback.answer()
+    
+    # Check rate limits
+    if not await check_rate_limit(callback.from_user.id, callback=callback):
+        return
 
     parts = callback.data.split("_", 3)
     if len(parts) < 4:
@@ -680,6 +983,26 @@ async def handle_tagged(callback: CallbackQuery) -> None:
     )
 
 
+async def handle_track(callback: CallbackQuery) -> None:
+    """Handle tracking menu callback."""
+    if not callback.data or not callback.from_user:
+        return
+    
+    # Parse: ig_track_{user_id}_{username}
+    parts = callback.data.split("_", 3)
+    if len(parts) < 4:
+        await callback.answer("❌ Ошибка данных", show_alert=True)
+        return
+    
+    user_id = parts[2]
+    username = parts[3]
+    
+    # Import here to avoid circular dependency
+    from src.presentation.telegram.handlers.tracking_handlers import show_tracking_menu
+    
+    await show_tracking_menu(callback, user_id, username)
+
+
 # Social handlers
 
 async def handle_followers(callback: CallbackQuery) -> None:
@@ -688,6 +1011,10 @@ async def handle_followers(callback: CallbackQuery) -> None:
         return
 
     await callback.answer()
+    
+    # Check rate limits
+    if not await check_rate_limit(callback.from_user.id, callback=callback):
+        return
 
     parts = callback.data.split("_", 3)
     if len(parts) < 4:
@@ -761,6 +1088,10 @@ async def handle_following(callback: CallbackQuery) -> None:
         return
 
     await callback.answer()
+    
+    # Check rate limits
+    if not await check_rate_limit(callback.from_user.id, callback=callback):
+        return
 
     parts = callback.data.split("_", 3)
     if len(parts) < 4:
@@ -895,6 +1226,9 @@ def register_instagram_handlers(dp: Dispatcher) -> None:
     dp.callback_query.register(handle_highlights, F.data.startswith("ig_highlights_"))
     dp.callback_query.register(handle_highlight_view, F.data.startswith("ig_highlight_"))
     dp.callback_query.register(handle_tagged, F.data.startswith("ig_tagged_"))
+    
+    # Tracking callback
+    dp.callback_query.register(handle_track, F.data.startswith("ig_track_"))
     
     # Social callbacks
     dp.callback_query.register(handle_followers, F.data.startswith("ig_followers_"))

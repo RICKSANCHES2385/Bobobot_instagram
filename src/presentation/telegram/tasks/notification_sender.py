@@ -1,5 +1,6 @@
 """Notification sender for content updates."""
 
+import asyncio
 from typing import List, Optional
 from aiogram import Bot
 
@@ -15,6 +16,28 @@ class NotificationSender:
     def __init__(self, bot: Bot):
         """Initialize sender."""
         self.bot = bot
+        self.is_running = False
+        self._task: Optional[asyncio.Task] = None
+    
+    async def start(self):
+        """Start notification sender (placeholder for future queue processing)."""
+        if self.is_running:
+            logger.warning("Notification sender already running")
+            return
+        
+        self.is_running = True
+        logger.info("Notification sender started")
+    
+    async def stop(self):
+        """Stop notification sender."""
+        self.is_running = False
+        if self._task:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+        logger.info("Notification sender stopped")
     
     async def send_story_notification(
         self,

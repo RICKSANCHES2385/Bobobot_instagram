@@ -5,7 +5,7 @@ from typing import Optional
 
 from src.application.referral.dtos import ReferralRewardDTO
 from src.domain.referral.repositories.referral_repository import ReferralRepository
-from src.domain.shared.value_objects.currency import Currency
+from src.domain.shared.value_objects.money import Currency
 
 
 class ProcessReferralRewardUseCase:

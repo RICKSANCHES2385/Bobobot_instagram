@@ -5,12 +5,8 @@ from typing import Any, Dict, List, Optional
 
 
 def format_number(num: int) -> str:
-    """Format number with K/M suffixes."""
-    if num >= 1_000_000:
-        return f"{num / 1_000_000:.1f}M"
-    elif num >= 1_000:
-        return f"{num / 1_000:.1f}K"
-    return str(num)
+    """Format number with thousands separators (e.g., 650,000,000)."""
+    return f"{num:,}".replace(",", ",")
 
 
 def format_profile_text(
@@ -25,45 +21,58 @@ def format_profile_text(
     is_business: bool = False,
     external_url: Optional[str] = None,
 ) -> str:
-    """Format Instagram profile information."""
-    # Header with username
-    header = f"👤 <b>@{username}</b>"
+    """Format Instagram profile information with expandable blockquote."""
+    # Header with full name or username
+    display_name = full_name if full_name else username
+    header = f"👤 {display_name}"
     
-    if is_verified:
-        header += " ✓"
+    lines = [header, ""]
     
-    if is_business:
-        header += " 💼"
-    
-    if is_private:
-        header += " 🔒"
-    
-    # Full name
-    lines = [header]
-    if full_name and full_name != username:
-        lines.append(f"<b>{full_name}</b>")
-    
-    lines.append("")
-    
-    # Statistics
-    lines.append("📊 <b>Статистика:</b>")
-    lines.append(f"• Публикаций: {format_number(posts_count)}")
-    lines.append(f"• Подписчиков: {format_number(followers_count)}")
-    lines.append(f"• Подписок: {format_number(following_count)}")
-    lines.append("")
+    # Expandable blockquote with details
+    blockquote_lines = ["<blockquote expandable>Нажмите, чтобы развернуть..."]
     
     # Biography
     if biography:
-        lines.append("📝 <b>Описание:</b>")
-        # Truncate long biographies
         bio_text = biography[:200] + "..." if len(biography) > 200 else biography
-        lines.append(bio_text)
-        lines.append("")
+        blockquote_lines.append(f"📋 <b>О себе:</b> {bio_text}")
+        blockquote_lines.append("")
     
     # External URL
     if external_url:
-        lines.append(f"🔗 <a href='{external_url}'>Ссылка</a>")
-        lines.append("")
+        blockquote_lines.append(f"🔗 <b>Ссылки:</b> {external_url}")
+        blockquote_lines.append("")
+    
+    # Statistics
+    blockquote_lines.append(f"— {format_number(posts_count)} постов")
+    blockquote_lines.append(f"— {format_number(followers_count)} подписчиков")
+    blockquote_lines.append(f"— {format_number(following_count)} подписок")
+    blockquote_lines.append("")
+    
+    # Content tracking status (placeholder)
+    blockquote_lines.append("• <b>Отслеживание контента:</b>")
+    blockquote_lines.append("— Истории: выключено")
+    blockquote_lines.append("— Публикации: выключено")
+    blockquote_lines.append("")
+    
+    # Audience tracking status (placeholder)
+    blockquote_lines.append("• <b>Отслеживание аудитории:</b>")
+    blockquote_lines.append("— Подписчики: доступ не активен")
+    blockquote_lines.append("— Подписки: доступ не активен")
+    
+    blockquote_lines.append("</blockquote>")
+    
+    lines.extend(blockquote_lines)
+    lines.append("")
+    
+    # Verification badge
+    if is_verified:
+        lines.append("✅ Верифицирован")
+    
+    if is_private:
+        lines.append("🔒 Закрытый профиль")
+    
+    if is_business:
+        lines.append("💼 Бизнес-аккаунт")
     
     return "\n".join(lines)
 

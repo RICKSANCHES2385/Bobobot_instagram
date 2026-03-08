@@ -16,7 +16,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import relationship
 
-from src.infrastructure.persistence.database import Base
+from src.infrastructure.persistence.base import Base
 
 
 class ReferralModel(Base):

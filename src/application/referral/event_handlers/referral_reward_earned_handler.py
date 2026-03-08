@@ -3,7 +3,7 @@
 from src.domain.referral.events.referral_events import ReferralRewardEarned
 from src.application.notification.use_cases.send_notification import SendNotificationUseCase
 from src.application.notification.dtos import CreateNotificationDTO
-from src.domain.shared.value_objects.currency import Currency
+from src.domain.shared.value_objects.money import Currency
 
 
 class ReferralRewardEarnedHandler:

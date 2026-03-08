@@ -4,7 +4,7 @@ from decimal import Decimal
 
 from src.application.referral.dtos import ReferralRewardDTO
 from src.domain.referral.value_objects.commission_rate import CommissionRate
-from src.domain.shared.value_objects.currency import Currency
+from src.domain.shared.value_objects.money import Currency
 
 
 class CalculateReferralRewardUseCase:

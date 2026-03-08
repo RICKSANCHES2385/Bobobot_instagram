@@ -18,8 +18,8 @@ from src.domain.referral.exceptions import (
 from src.domain.referral.value_objects.commission_rate import CommissionRate
 from src.domain.referral.value_objects.referral_code import ReferralCode
 from src.domain.referral.value_objects.referral_reward import ReferralReward
-from src.domain.shared.aggregate_root import AggregateRoot
-from src.domain.shared.value_objects.currency import Currency
+from src.domain.shared.entities.base import AggregateRoot
+from src.domain.shared.value_objects.money import Currency
 
 
 @dataclass
@@ -35,17 +35,16 @@ class Referral(AggregateRoot):
     - Minimum payout: 1000 RUB
     """
 
-    referrer_user_id: int
-    referral_code: ReferralCode
-    commission_rate: CommissionRate
-    total_earned: ReferralReward
-    total_paid_out: ReferralReward
+    referrer_user_id: int = field(default=0)
+    referral_code: ReferralCode = field(default=None)
+    commission_rate: CommissionRate = field(default=None)
+    total_earned: ReferralReward = field(default=None)
+    total_paid_out: ReferralReward = field(default=None)
     referred_user_id: Optional[int] = None
     applied_at: Optional[datetime] = None
     first_payment_at: Optional[datetime] = None
     last_payout_at: Optional[datetime] = None
     referral_count: int = 0
-    _domain_events: list = field(default_factory=list, init=False, repr=False)
 
     @classmethod
     def create(

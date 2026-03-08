@@ -1,405 +1,374 @@
-"""Tracking handlers for Telegram bot."""
+"""Tracking menu handlers for Telegram bot."""
+
+import asyncio
+from typing import Optional
 
 from aiogram import Dispatcher, F
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import CallbackQuery
 
 from src.infrastructure.logging.logger import get_logger
 from src.presentation.telegram.dependencies import get_container
+from src.presentation.telegram.keyboards.tracking_menu import (
+    get_tracking_menu_keyboard,
+    get_tracking_interval_keyboard
+)
+from src.application.content_tracking.use_cases.start_tracking import StartTrackingCommand
+from src.application.content_tracking.use_cases.stop_tracking import StopTrackingUseCase
+from src.domain.content_tracking.value_objects.content_type import ContentType
+from src.domain.content_tracking.value_objects.check_interval import CheckInterval
 
 logger = get_logger(__name__)
 
 
-def get_tracking_menu_keyboard(user_id: str, username: str) -> InlineKeyboardMarkup:
-    """Get tracking configuration menu keyboard."""
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📖 Stories", callback_data=f"track_type_stories_{user_id}_{username}")],
-        [InlineKeyboardButton(text="📸 Posts", callback_data=f"track_type_posts_{user_id}_{username}")],
-        [InlineKeyboardButton(text="👥 Followers", callback_data=f"track_type_followers_{user_id}_{username}")],
-        [InlineKeyboardButton(text="👤 Following", callback_data=f"track_type_following_{user_id}_{username}")],
-        [InlineKeyboardButton(text="◀️ Назад", callback_data=f"ig_back_{user_id}_{username}")]
-    ])
-
-
-def get_tracking_interval_keyboard(tracking_type: str, user_id: str, username: str) -> InlineKeyboardMarkup:
-    """Get tracking interval selection keyboard."""
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⏱ 1 час", callback_data=f"track_interval_{tracking_type}_1h_{user_id}_{username}")],
-        [InlineKeyboardButton(text="⏱ 6 часов", callback_data=f"track_interval_{tracking_type}_6h_{user_id}_{username}")],
-        [InlineKeyboardButton(text="⏱ 12 часов", callback_data=f"track_interval_{tracking_type}_12h_{user_id}_{username}")],
-        [InlineKeyboardButton(text="⏱ 24 часа", callback_data=f"track_interval_{tracking_type}_24h_{user_id}_{username}")],
-        [InlineKeyboardButton(text="◀️ Назад", callback_data=f"ig_track_{user_id}_{username}")]
-    ])
-
-
-async def show_tracking_menu(callback: CallbackQuery, user_id: str, username: str) -> None:
-    """Show tracking configuration menu."""
-    # TODO: Get current tracking status via GetUserTrackingsUseCase
+async def get_tracking_status_dict(user_id: int, username: str) -> dict:
+    """Get tracking status for all types.
     
-    text = (
-        f"📊 <b>Отслеживание @{username}</b>\n\n"
-        "Выберите что отслеживать:\n\n"
-        "📖 Stories - новые истории\n"
-        "📸 Posts - новые публикации\n"
-        "👥 Followers - изменения подписчиков\n"
-        "👤 Following - изменения подписок\n\n"
-        "🔔 Вы будете получать уведомления о новом контенте"
-    )
-    
-    keyboard = get_tracking_menu_keyboard(user_id, username)
+    Returns:
+        Dict with status for each type:
+        {
+            'stories': {'active': bool, 'interval': int},
+            'posts': {'active': bool, 'interval': int},
+            'followers': {'active': bool, 'interval': int},
+            'following': {'active': bool, 'interval': int}
+        }
+    """
+    container = get_container()
+    use_cases = container.get_use_cases()
     
     try:
-        await callback.message.edit_text(text, reply_markup=keyboard)
-    except Exception:
-        await callback.message.answer(text, reply_markup=keyboard)
+        trackings = await use_cases.get_user_trackings.execute(user_id)
+        
+        # Find tracking for this username
+        user_tracking = next((t for t in trackings if t.instagram_username == username), None)
+        
+        if not user_tracking:
+            return {
+                'stories': {'active': False, 'interval': None},
+                'posts': {'active': False, 'interval': None},
+                'followers': {'active': False, 'interval': None},
+                'following': {'active': False, 'interval': None},
+            }
+        
+        # Build status dict
+        status = {}
+        for tracking_type in ['stories', 'posts', 'followers', 'following']:
+            # Check if this type is tracked
+            is_active = tracking_type in [t.value for t in user_tracking.tracking_types]
+            interval = user_tracking.check_interval_hours if is_active else None
+            
+            status[tracking_type] = {
+                'active': is_active,
+                'interval': interval
+            }
+        
+        return status
+        
+    except Exception as e:
+        logger.error(f"Error getting tracking status: {e}")
+        return {
+            'stories': {'active': False, 'interval': None},
+            'posts': {'active': False, 'interval': None},
+            'followers': {'active': False, 'interval': None},
+            'following': {'active': False, 'interval': None},
+        }
 
 
-async def tracking_start_callback(callback: CallbackQuery) -> None:
-    """Handle start tracking callback - show menu."""
+async def show_tracking_menu(
+    callback: CallbackQuery,
+    user_id: str,
+    username: str
+) -> None:
+    """Show tracking configuration menu."""
+    if not callback.message:
+        return
+    
+    await callback.answer()
+    
+    # Get current tracking status
+    tracking_status = await get_tracking_status_dict(callback.from_user.id, username)
+    
+    # Build text
+    text = f"🔔 <b>Отслеживание <a href='https://www.instagram.com/{username}/'>{username}</a></b>\n\n"
+    text += "Выберите, что хотите отслеживать:\n\n"
+    
+    # Check if any tracking is active
+    any_active = any(status['active'] for status in tracking_status.values())
+    
+    if any_active:
+        text += "✅ Отслеживание активно\n\n"
+        text += "Нажмите на кнопку, чтобы изменить настройки"
+    else:
+        text += "Нажмите на кнопку, чтобы включить отслеживание"
+    
+    keyboard = get_tracking_menu_keyboard(user_id, username, tracking_status)
+    
+    try:
+        await callback.message.edit_text(
+            text,
+            reply_markup=keyboard,
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logger.warning(f"Could not edit message: {e}")
+        # Send new message
+        await callback.message.answer(
+            text,
+            reply_markup=keyboard,
+            parse_mode="HTML"
+        )
+
+
+async def handle_tracking_menu(callback: CallbackQuery) -> None:
+    """Handle track_menu_{user_id}_{username} callback."""
     if not callback.data or not callback.from_user:
         return
-
-    await callback.answer()
-
-    # Parse: ig_track_{user_id}_{username}
+    
     parts = callback.data.split("_", 3)
     if len(parts) < 4:
         await callback.answer("❌ Ошибка данных", show_alert=True)
         return
-
+    
     user_id = parts[2]
     username = parts[3]
-
-    logger.info(f"Opening tracking menu for {username} (user_id={user_id})")
-
+    
     await show_tracking_menu(callback, user_id, username)
 
 
 async def handle_tracking_type_selection(callback: CallbackQuery) -> None:
-    """Handle tracking type selection - show interval menu."""
-    if not callback.data or not callback.from_user:
+    """Handle tracking type selection (stories, posts, followers, following)."""
+    if not callback.data or not callback.from_user or not callback.message:
         return
-
+    
     await callback.answer()
-
-    # Parse: track_type_{type}_{user_id}_{username}
-    parts = callback.data.split("_", 4)
-    if len(parts) < 5:
+    
+    # Parse: track_{type}_{user_id}_{username}
+    parts = callback.data.split("_", 3)
+    if len(parts) < 4:
         await callback.answer("❌ Ошибка данных", show_alert=True)
         return
-
-    tracking_type = parts[2]
-    user_id = parts[3]
-    username = parts[4]
-
-    logger.info(f"Selected tracking type {tracking_type} for {username}")
-
-    type_names = {
-        "stories": "Stories",
-        "posts": "Posts",
-        "followers": "Followers",
-        "following": "Following"
-    }
-
-    text = (
-        f"📊 <b>Отслеживание {type_names.get(tracking_type, tracking_type)}</b>\n"
-        f"Профиль: @{username}\n\n"
-        "Выберите интервал проверки:"
-    )
-
-    keyboard = get_tracking_interval_keyboard(tracking_type, user_id, username)
+    
+    tracking_type = parts[1]  # stories, posts, followers, following
+    user_id = parts[2]
+    username = parts[3]
+    
+    logger.info(f"User {callback.from_user.id} selected tracking type: {tracking_type} for {username}")
+    
+    # Get current tracking status
+    tracking_status = await get_tracking_status_dict(callback.from_user.id, username)
+    current_interval = tracking_status.get(tracking_type, {}).get('interval')
+    
+    # Check if audience tracking (followers/following)
+    if tracking_type in ['followers', 'following']:
+        # TODO: Check 100k follower limit
+        # TODO: Check if user has paid subscription for audience tracking
+        # For now, show interval selection
+        pass
+    
+    # Show interval selection menu
+    type_text = {
+        'stories': 'историй',
+        'posts': 'публикаций',
+        'followers': 'подписчиков',
+        'following': 'подписок'
+    }.get(tracking_type, tracking_type)
+    
+    text = f"⏰ <b>Интервал проверки {type_text}</b>\n\n"
+    text += f"Выберите, как часто проверять новые {type_text} @{username}:"
+    
+    keyboard = get_tracking_interval_keyboard(user_id, username, tracking_type, current_interval)
     
     try:
-        await callback.message.edit_text(text, reply_markup=keyboard)
-    except Exception:
-        await callback.message.answer(text, reply_markup=keyboard)
+        await callback.message.edit_text(
+            text,
+            reply_markup=keyboard,
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logger.warning(f"Could not edit message: {e}")
+        await callback.message.answer(
+            text,
+            reply_markup=keyboard,
+            parse_mode="HTML"
+        )
 
 
 async def handle_tracking_interval_set(callback: CallbackQuery) -> None:
-    """Handle tracking interval selection - create tracking."""
+    """Handle setting tracking interval."""
     if not callback.data or not callback.from_user or not callback.message:
         return
-
+    
     await callback.answer()
-
-    # Parse: track_interval_{type}_{interval}_{user_id}_{username}
+    
+    # Parse: track_set_{type}_{user_id}_{username}_{interval}
     parts = callback.data.split("_", 5)
     if len(parts) < 6:
         await callback.answer("❌ Ошибка данных", show_alert=True)
         return
-
-    tracking_type = parts[2]
-    interval = parts[3]
-    user_id = int(parts[4])
-    username = parts[5]
-
-    logger.info(f"Creating tracking {tracking_type} for {username} with interval {interval}")
-
+    
+    tracking_type = parts[2]  # stories, posts, followers, following
+    user_id = parts[3]
+    username = parts[4]
+    interval_str = parts[5]  # 1h, 6h, 12h, 24h
+    
+    # Convert interval to hours
+    interval_map = {"1h": 1, "6h": 6, "12h": 12, "24h": 24}
+    interval_hours = interval_map.get(interval_str)
+    
+    if not interval_hours:
+        await callback.answer("❌ Неверный интервал", show_alert=True)
+        return
+    
+    logger.info(f"User {callback.from_user.id} setting tracking: {tracking_type} for {username} every {interval_hours}h")
+    
     # Get use cases
     container = get_container()
     use_cases = container.get_use_cases()
-
+    
     try:
-        # Check subscription status
-        sub_status = await use_cases.check_subscription_status.execute(user_id)
-        if not sub_status.is_active:
-            await callback.message.answer(
-                "❌ Для отслеживания нужна активная подписка\n\n"
-                "Используйте /buy для покупки подписки"
-            )
+        # Map tracking type to domain enum
+        type_map = {
+            'stories': TrackingType.STORIES,
+            'posts': TrackingType.POSTS,
+            'followers': TrackingType.FOLLOWERS,
+            'following': TrackingType.FOLLOWING
+        }
+        
+        domain_type = type_map.get(tracking_type)
+        if not domain_type:
+            await callback.answer("❌ Неверный тип отслеживания", show_alert=True)
             return
         
-        # Map interval to hours
-        interval_hours = {
-            "1h": 1,
-            "6h": 6,
-            "12h": 12,
-            "24h": 24
-        }
-        
-        # Map tracking type to content type
-        from src.domain.content_tracking.value_objects.content_type import ContentType, ContentTypeEnum
-        content_type_map = {
-            "stories": ContentType(ContentTypeEnum.STORIES),
-            "posts": ContentType(ContentTypeEnum.POSTS),
-            "followers": ContentType(ContentTypeEnum.STORIES),  # Fallback to STORIES for now
-            "following": ContentType(ContentTypeEnum.STORIES)   # Fallback to STORIES for now
-        }
-        
-        # Start tracking
-        await use_cases.start_tracking.execute(
-            user_id=user_id,
+        # Create tracking
+        command = StartTrackingCommand(
+            user_id=callback.from_user.id,
             instagram_username=username,
-            content_types=[content_type_map[tracking_type]],
-            check_interval_hours=interval_hours[interval]
+            tracking_types=[domain_type],
+            check_interval_hours=interval_hours
         )
         
-        type_names = {
-            "stories": "Stories",
-            "posts": "Posts",
-            "followers": "Followers",
-            "following": "Following"
-        }
-
-        interval_names = {
-            "1h": "1 час",
-            "6h": "6 часов",
-            "12h": "12 часов",
-            "24h": "24 часа"
-        }
+        await use_cases.start_tracking.execute(command)
         
-        text = (
-            f"✅ <b>Отслеживание активировано</b>\n\n"
-            f"Профиль: @{username}\n"
-            f"Тип: {type_names.get(tracking_type, tracking_type)}\n"
-            f"Интервал: {interval_names.get(interval, interval)}\n\n"
-            "🔔 Вы будете получать уведомления о новом контенте"
-        )
+        # Show success message
+        type_text = {
+            'stories': 'историй',
+            'posts': 'публикаций',
+            'followers': 'подписчиков',
+            'following': 'подписок'
+        }.get(tracking_type, tracking_type)
         
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="◀️ Назад к профилю", callback_data=f"ig_back_{user_id}_{username}")]
-        ])
+        interval_text = {
+            1: "каждый час",
+            6: "каждые 6 часов",
+            12: "каждые 12 часов",
+            24: "раз в день",
+        }.get(interval_hours, f"каждые {interval_hours} часов")
         
-        await callback.message.answer(text, reply_markup=keyboard)
+        text = f"✅ Отслеживание {type_text} @{username} включено!\n\n"
+        text += f"⏰ Интервал проверки: {interval_text}\n\n"
+        text += f"Вы будете получать уведомления о новых {type_text}."
+        
+        await callback.message.edit_text(text, parse_mode="HTML")
+        
+        # Show tracking menu again after 2 seconds
+        await asyncio.sleep(2)
+        await show_tracking_menu(callback, user_id, username)
         
     except Exception as e:
-        logger.error(f"Error creating tracking for {username}: {e}")
-        await callback.message.answer(
-            f"❌ Не удалось создать отслеживание\n\n"
-            f"Ошибка: {str(e)}"
+        logger.error(f"Error setting tracking: {e}")
+        await callback.message.edit_text(
+            f"❌ Не удалось включить отслеживание\n\n"
+            f"Ошибка: {str(e)}",
+            parse_mode="HTML"
         )
 
 
 async def handle_tracking_disable_single(callback: CallbackQuery) -> None:
     """Handle disabling single tracking type."""
-    if not callback.data or not callback.from_user:
-        return
-
-    await callback.answer()
-
-    # Parse: track_disable_{type}_{user_id}_{username}
-    parts = callback.data.split("_", 4)
-    if len(parts) < 5:
-        await callback.answer("❌ Ошибка данных", show_alert=True)
-        return
-
-    tracking_type = parts[2]
-    user_id = parts[3]
-    username = parts[4]
-
-    logger.info(f"Disabling tracking {tracking_type} for {username}")
-
-    # TODO: Call StopTrackingUseCase for specific type
-    
-    await callback.answer(f"✅ Отслеживание {tracking_type} отключено", show_alert=True)
-    await show_tracking_menu(callback, user_id, username)
-
-
-async def handle_tracking_menu_back(callback: CallbackQuery) -> None:
-    """Handle back to tracking menu."""
-    if not callback.data or not callback.from_user:
-        return
-
-    await callback.answer()
-
-    # Parse: track_menu_{user_id}_{username}
-    parts = callback.data.split("_", 3)
-    if len(parts) < 4:
-        await callback.answer("❌ Ошибка данных", show_alert=True)
-        return
-
-    user_id = parts[2]
-    username = parts[3]
-
-    await show_tracking_menu(callback, user_id, username)
-
-
-async def tracking_stop_callback(callback: CallbackQuery) -> None:
-    """Handle stop all tracking callback."""
     if not callback.data or not callback.from_user or not callback.message:
         return
-
+    
     await callback.answer()
-
-    # Parse: unsubscribe_tracking_{username}
-    parts = callback.data.split("_", 2)
-    if len(parts) < 3:
+    
+    # Parse: track_disable_single_{type}_{user_id}_{username}
+    parts = callback.data.split("_", 5)
+    if len(parts) < 6:
         await callback.answer("❌ Ошибка данных", show_alert=True)
         return
-
-    username = parts[2]
-    user_id = callback.from_user.id
-
-    logger.info(f"Stopping all tracking for {username}")
-
+    
+    tracking_type = parts[3]  # stories, posts, followers, following
+    user_id = parts[4]
+    username = parts[5]
+    
+    logger.info(f"User {callback.from_user.id} disabling tracking: {tracking_type} for {username}")
+    
     # Get use cases
     container = get_container()
     use_cases = container.get_use_cases()
-
+    
     try:
-        # Get user trackings
-        trackings = await use_cases.get_user_trackings.execute(user_id)
+        # Map tracking type to domain enum
+        type_map = {
+            'stories': TrackingType.STORIES,
+            'posts': TrackingType.POSTS,
+            'followers': TrackingType.FOLLOWERS,
+            'following': TrackingType.FOLLOWING
+        }
         
-        # Find tracking for this username
-        tracking = next((t for t in trackings if t.instagram_username == username), None)
+        domain_type = type_map.get(tracking_type)
+        if not domain_type:
+            await callback.answer("❌ Неверный тип отслеживания", show_alert=True)
+            return
         
-        if tracking:
-            # Stop tracking
-            await use_cases.stop_tracking.execute(tracking.id)
-            
-            await callback.message.edit_text(
-                f"✅ Вы отписались от отслеживания <b>@{username}</b>"
-            )
-        else:
-            await callback.message.edit_text(
-                f"❌ Отслеживание @{username} не найдено"
-            )
-            
+        # Get current tracking
+        trackings = await use_cases.get_user_trackings.execute(callback.from_user.id)
+        user_tracking = next((t for t in trackings if t.instagram_username == username), None)
+        
+        if not user_tracking:
+            await callback.answer("❌ Отслеживание не найдено", show_alert=True)
+            return
+        
+        # Stop tracking
+        command = StopTrackingCommand(tracking_id=user_tracking.id)
+        await use_cases.stop_tracking.execute(command)
+        
+        # Show success message
+        type_text = {
+            'stories': 'историй',
+            'posts': 'публикаций',
+            'followers': 'подписчиков',
+            'following': 'подписок'
+        }.get(tracking_type, tracking_type)
+        
+        text = f"🔕 Отслеживание {type_text} @{username} отключено"
+        
+        await callback.message.edit_text(text, parse_mode="HTML")
+        
+        # Show tracking menu again after 2 seconds
+        await asyncio.sleep(2)
+        await show_tracking_menu(callback, user_id, username)
+        
     except Exception as e:
-        logger.error(f"Error stopping tracking for {username}: {e}")
-        await callback.message.answer(
-            f"❌ Не удалось остановить отслеживание\n\n"
-            f"Ошибка: {str(e)}"
+        logger.error(f"Error disabling tracking: {e}")
+        await callback.message.edit_text(
+            f"❌ Не удалось отключить отслеживание\n\n"
+            f"Ошибка: {str(e)}",
+            parse_mode="HTML"
         )
-
-
-async def my_trackings_callback(callback: CallbackQuery) -> None:
-    """Handle my trackings callback."""
-    if not callback.from_user:
-        return
-
-    await callback.answer()
-
-    logger.info(f"User {callback.from_user.id} requested trackings")
-
-    # Delete main menu message
-    try:
-        await callback.message.delete()
-    except Exception as e:
-        logger.warning(f"Could not delete message: {e}")
-
-    # TODO: Call GetUserTrackingsUseCase
-    text = (
-        "📊 <b>Мои отслеживания</b>\n\n"
-        "У вас нет отслеживаемых аккаунтов\n\n"
-        "💡 Чтобы добавить аккаунт:\n"
-        "1. Найдите профиль через /instagram @username\n"
-        "2. Нажмите кнопку 📊 Отслеживать\n"
-        "3. Выберите что отслеживать (Stories, Posts и т.д.)\n"
-        "4. Настройте интервал проверки\n\n"
-        "🔔 Вы будете получать уведомления о новом контенте!"
-    )
-
-    await callback.message.answer(text)
-
-
-# Audience tracking (premium feature)
-
-async def handle_audience_payment(callback: CallbackQuery) -> None:
-    """Handle audience tracking payment."""
-    if not callback.data or not callback.from_user:
-        return
-
-    await callback.answer()
-
-    # Parse: track_audience_{user_id}_{username}
-    parts = callback.data.split("_", 3)
-    if len(parts) < 4:
-        await callback.answer("❌ Ошибка данных", show_alert=True)
-        return
-
-    user_id = parts[2]
-    username = parts[3]
-
-    logger.info(f"User {callback.from_user.id} requested audience tracking for {username}")
-
-    text = (
-        f"📊 <b>Audience Tracking для @{username}</b>\n\n"
-        "🔥 Премиум функция:\n"
-        "• Детальная аналитика подписчиков\n"
-        "• Отслеживание новых подписчиков\n"
-        "• Отслеживание отписавшихся\n"
-        "• История изменений\n\n"
-        "💰 Стоимость: 99 Stars (разовый платеж)\n\n"
-        "Оплатить?"
-    )
-
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💳 Оплатить 99 Stars", callback_data=f"audience_pay_{user_id}_{username}")],
-        [InlineKeyboardButton(text="◀️ Назад", callback_data=f"ig_track_{user_id}_{username}")]
-    ])
-
-    try:
-        await callback.message.edit_text(text, reply_markup=keyboard)
-    except Exception:
-        await callback.message.answer(text, reply_markup=keyboard)
-
-
-async def handle_audience_precheckout(callback: CallbackQuery) -> None:
-    """Handle audience tracking pre-checkout."""
-    # TODO: Implement Stars payment pre-checkout
-    pass
-
-
-async def handle_audience_successful_payment(callback: CallbackQuery) -> None:
-    """Handle successful audience tracking payment."""
-    # TODO: Activate audience tracking
-    # TODO: Call StartAudienceTrackingUseCase
-    pass
 
 
 def register_tracking_handlers(dp: Dispatcher) -> None:
     """Register tracking handlers."""
-    # Main tracking callbacks
-    dp.callback_query.register(tracking_start_callback, F.data.startswith("ig_track_"))
-    dp.callback_query.register(handle_tracking_type_selection, F.data.startswith("track_type_"))
-    dp.callback_query.register(handle_tracking_interval_set, F.data.startswith("track_interval_"))
-    dp.callback_query.register(handle_tracking_disable_single, F.data.startswith("track_disable_"))
-    dp.callback_query.register(handle_tracking_menu_back, F.data.startswith("track_menu_"))
-    dp.callback_query.register(tracking_stop_callback, F.data.startswith("unsubscribe_tracking_"))
-    dp.callback_query.register(my_trackings_callback, F.data == "my_trackings")
+    # Tracking menu
+    dp.callback_query.register(handle_tracking_menu, F.data.startswith("track_menu_"))
     
-    # Audience tracking callbacks
-    dp.callback_query.register(handle_audience_payment, F.data.startswith("track_audience_"))
-    dp.callback_query.register(handle_audience_precheckout, F.data.startswith("audience_pay_"))
-
-    logger.info("Tracking handlers registered")
+    # Type selection
+    dp.callback_query.register(handle_tracking_type_selection, F.data.startswith("track_stories_"))
+    dp.callback_query.register(handle_tracking_type_selection, F.data.startswith("track_posts_"))
+    dp.callback_query.register(handle_tracking_type_selection, F.data.startswith("track_followers_"))
+    dp.callback_query.register(handle_tracking_type_selection, F.data.startswith("track_following_"))
+    
+    # Interval set
+    dp.callback_query.register(handle_tracking_interval_set, F.data.startswith("track_set_"))
+    
+    # Disable
+    dp.callback_query.register(handle_tracking_disable_single, F.data.startswith("track_disable_single_"))

@@ -3,7 +3,7 @@
 from typing import List, Optional
 from datetime import datetime
 from sqlalchemy import select, and_, func
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from src.domain.user_management.repositories.user_repository import IUserRepository
 from src.domain.user_management.entities.user import User
@@ -24,39 +24,42 @@ from src.infrastructure.persistence.models.user_model import (
 class SQLAlchemyUserRepository(IUserRepository):
     """SQLAlchemy implementation of user repository."""
 
-    def __init__(self, session: AsyncSession):
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession]):
         """Initialize repository.
         
         Args:
-            session: SQLAlchemy async session
+            session_factory: SQLAlchemy async session factory
         """
-        self._session = session
+        self._session_factory = session_factory
 
     async def save(self, user: User) -> None:
         """Save user."""
-        model = await self._session.get(UserModel, user.user_id.value)
+        async with self._session_factory() as session:
+            model = await session.get(UserModel, user.user_id.value)
 
-        if model is None:
-            # Create new
-            model = self._to_model(user)
-            self._session.add(model)
-        else:
-            # Update existing
-            self._update_model(model, user)
+            if model is None:
+                # Create new
+                model = self._to_model(user)
+                session.add(model)
+            else:
+                # Update existing
+                self._update_model(model, user)
 
-        await self._session.flush()
+            await session.commit()
 
     async def find_by_id(self, user_id: UserId) -> Optional[User]:
         """Find user by ID."""
-        model = await self._session.get(UserModel, user_id.value)
-        return self._to_entity(model) if model else None
+        async with self._session_factory() as session:
+            model = await session.get(UserModel, user_id.value)
+            return self._to_entity(model) if model else None
 
     async def find_by_telegram_username(self, username: str) -> Optional[User]:
         """Find user by Telegram username."""
-        stmt = select(UserModel).where(UserModel.telegram_username == username)
-        result = await self._session.execute(stmt)
-        model = result.scalar_one_or_none()
-        return self._to_entity(model) if model else None
+        async with self._session_factory() as session:
+            stmt = select(UserModel).where(UserModel.telegram_username == username)
+            result = await session.execute(stmt)
+            model = result.scalar_one_or_none()
+            return self._to_entit
 
     async def find_all_active(self) -> List[User]:
         """Find all active users."""

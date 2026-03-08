@@ -11,7 +11,7 @@ from src.domain.referral.repositories.referral_repository import ReferralReposit
 from src.domain.referral.value_objects.commission_rate import CommissionRate
 from src.domain.referral.value_objects.referral_code import ReferralCode
 from src.domain.referral.value_objects.referral_reward import ReferralReward
-from src.domain.shared.value_objects.currency import Currency
+from src.domain.shared.value_objects.money import Currency
 from src.infrastructure.persistence.models.referral_model import ReferralModel
 
 

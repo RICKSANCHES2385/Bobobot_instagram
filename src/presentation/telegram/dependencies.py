@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from typing import Optional
+from contextlib import asynccontextmanager
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -68,6 +69,9 @@ from src.infrastructure.persistence.repositories.sqlalchemy_referral_repository 
 from src.infrastructure.external_services.hiker_api.hiker_api_adapter import HikerAPIAdapter
 from src.infrastructure.messaging.telegram_notification_sender import TelegramNotificationSender
 from src.infrastructure.payment.adapters.cryptobot_adapter import CryptoBotAdapter
+from src.infrastructure.cache.cache_service import CacheService
+from src.infrastructure.cache.rate_limit_service import RateLimitService
+from src.infrastructure.persistence.unit_of_work import SQLAlchemyUnitOfWork, IUnitOfWork
 
 
 @dataclass
@@ -141,16 +145,31 @@ class DependencyContainer:
         hiker_api_key: str,
         telegram_bot_token: str,
         cryptobot_token: Optional[str] = None,
+        cache_service: Optional[CacheService] = None,
     ):
         self.session_factory = session_factory
         self.hiker_api_key = hiker_api_key
         self.telegram_bot_token = telegram_bot_token
         self.cryptobot_token = cryptobot_token
+        self.cache_service = cache_service
         self._use_cases: Optional[UseCaseContainer] = None
+        self._rate_limit_service: Optional[RateLimitService] = None
     
     async def get_session(self) -> AsyncSession:
         """Get database session."""
         return self.session_factory()
+    
+    @asynccontextmanager
+    async def get_uow(self):
+        """Get Unit of Work with automatic transaction management."""
+        async with self.session_factory() as session:
+            uow = SQLAlchemyUnitOfWork(session)
+            try:
+                yield uow
+                await uow.commit()
+            except Exception:
+                await uow.rollback()
+                raise
     
     def get_use_cases(self) -> UseCaseContainer:
         """Get use cases container (lazy initialization)."""
@@ -158,72 +177,54 @@ class DependencyContainer:
             self._use_cases = self._create_use_cases()
         return self._use_cases
     
+    def get_rate_limit_service(self) -> RateLimitService:
+        """Get rate limit service (lazy initialization)."""
+        if self._rate_limit_service is None:
+            if self.cache_service is None:
+                raise RuntimeError("CacheService not provided to container")
+            self._rate_limit_service = RateLimitService(cache_service=self.cache_service)
+        return self._rate_limit_service
+    
     def _create_use_cases(self) -> UseCaseContainer:
         """Create and wire all use cases."""
-        
-        # Create repositories (they will get session from context)
-        user_repo = SQLAlchemyUserRepository(self.session_factory)
-        subscription_repo = SQLAlchemySubscriptionRepository(self.session_factory)
-        payment_repo = SQLAlchemyPaymentRepository(self.session_factory)
-        tracking_repo = SQLAlchemyContentTrackingRepository(self.session_factory)
-        notification_repo = SQLAlchemyNotificationRepository(self.session_factory)
-        audience_tracking_repo = SqlAlchemyAudienceTrackingRepository(self.session_factory)
-        referral_repo = SqlAlchemyReferralRepository(self.session_factory)
         
         # Create external services
         hiker_api = HikerAPIAdapter(api_key=self.hiker_api_key)
         telegram_service = TelegramNotificationSender(bot_token=self.telegram_bot_token)
         
-        # User Management Use Cases
-        register_user = RegisterUserUseCase(user_repository=user_repo)
-        get_user = GetUserUseCase(user_repository=user_repo)
-        activate_subscription = ActivateSubscriptionUseCase(
-            user_repository=user_repo,
-            subscription_repository=subscription_repo,
-        )
+        # User Management Use Cases - pass session_factory, they'll create session inside
+        register_user = RegisterUserUseCase(session_factory=self.session_factory)
+        get_user = GetUserUseCase(session_factory=self.session_factory)
+        activate_subscription = ActivateSubscriptionUseCase(session_factory=self.session_factory)
         
         # Instagram Integration Use Cases
-        fetch_instagram_profile = FetchInstagramProfileUseCase(instagram_api=hiker_api)
-        fetch_instagram_stories = FetchInstagramStoriesUseCase(instagram_api=hiker_api)
-        fetch_instagram_posts = FetchInstagramPostsUseCase(instagram_api=hiker_api)
-        fetch_instagram_reels = FetchInstagramReelsUseCase(instagram_api=hiker_api)
-        fetch_instagram_highlights = FetchInstagramHighlightsUseCase(instagram_api=hiker_api)
-        fetch_instagram_highlight_stories = FetchInstagramHighlightStoriesUseCase(instagram_api=hiker_api)
-        fetch_instagram_followers = FetchInstagramFollowersUseCase(instagram_api=hiker_api)
-        fetch_instagram_following = FetchInstagramFollowingUseCase(instagram_api=hiker_api)
-        fetch_instagram_tagged_posts = FetchInstagramTaggedPostsUseCase(instagram_api=hiker_api)
+        fetch_instagram_profile = FetchInstagramProfileUseCase(instagram_api_client=hiker_api)
+        fetch_instagram_stories = FetchInstagramStoriesUseCase(instagram_api_client=hiker_api)
+        fetch_instagram_posts = FetchInstagramPostsUseCase(instagram_api_client=hiker_api)
+        fetch_instagram_reels = FetchInstagramReelsUseCase(instagram_api_client=hiker_api)
+        fetch_instagram_highlights = FetchInstagramHighlightsUseCase(instagram_api_client=hiker_api)
+        fetch_instagram_highlight_stories = FetchInstagramHighlightStoriesUseCase(instagram_api_client=hiker_api)
+        fetch_instagram_followers = FetchInstagramFollowersUseCase(instagram_api_client=hiker_api)
+        fetch_instagram_following = FetchInstagramFollowingUseCase(instagram_api_client=hiker_api)
+        fetch_instagram_tagged_posts = FetchInstagramTaggedPostsUseCase(instagram_api_client=hiker_api)
         
-        # Content Tracking Use Cases
-        start_tracking = StartTrackingUseCase(
-            tracking_repository=tracking_repo,
-            user_repository=user_repo,
-        )
-        stop_tracking = StopTrackingUseCase(tracking_repository=tracking_repo)
-        pause_tracking = PauseTrackingUseCase(tracking_repository=tracking_repo)
-        resume_tracking = ResumeTrackingUseCase(tracking_repository=tracking_repo)
-        get_user_trackings = GetUserTrackingsUseCase(tracking_repository=tracking_repo)
+        # Content Tracking Use Cases - TODO: Update to use session_factory
+        start_tracking = None  # StartTrackingUseCase(tracking_repository=tracking_repo, instagram_adapter=hiker_api)
+        stop_tracking = None  # StopTrackingUseCase(tracking_repository=tracking_repo)
+        pause_tracking = None  # PauseTrackingUseCase(tracking_repository=tracking_repo)
+        resume_tracking = None  # ResumeTrackingUseCase(tracking_repository=tracking_repo)
+        get_user_trackings = None  # GetUserTrackingsUseCase(tracking_repository=tracking_repo)
         
-        # Subscription Use Cases
-        check_subscription_status = CheckSubscriptionStatusUseCase(
-            subscription_repository=subscription_repo
-        )
-        get_subscription = GetSubscriptionUseCase(subscription_repository=subscription_repo)
-        create_subscription = CreateSubscriptionUseCase(
-            subscription_repository=subscription_repo,
-            user_repository=user_repo,
-        )
+        # Subscription Use Cases - TODO: Update to use session_factory
+        check_subscription_status = None  # CheckSubscriptionStatusUseCase(subscription_repository=subscription_repo)
+        get_subscription = None  # GetSubscriptionUseCase(subscription_repository=subscription_repo)
+        create_subscription = None  # CreateSubscriptionUseCase(subscription_repository=subscription_repo)
         
-        # Payment Use Cases
-        create_payment = CreatePaymentUseCase(payment_repository=payment_repo)
-        process_payment = ProcessPaymentUseCase(payment_repository=payment_repo)
-        complete_payment = CompletePaymentUseCase(
-            payment_repository=payment_repo,
-            subscription_repository=subscription_repo,
-            user_repository=user_repo,
-        )
-        # Inject referral reward processing (will be set after creating process_referral_reward)
-        complete_payment.process_referral_reward_use_case = None  # Will be set below
-        get_payment_status = GetPaymentStatusUseCase(payment_repository=payment_repo)
+        # Payment Use Cases - TODO: Update to use session_factory
+        create_payment = None  # CreatePaymentUseCase(payment_repository=payment_repo)
+        process_payment = None  # ProcessPaymentUseCase(payment_repository=payment_repo)
+        complete_payment = None  # CompletePaymentUseCase(payment_repository=payment_repo)
+        get_payment_status = None  # GetPaymentStatusUseCase(payment_repository=payment_repo)
         
         # CryptoBot Payment Use Cases (optional)
         create_cryptobot_invoice = None
@@ -237,57 +238,31 @@ class DependencyContainer:
                 cryptobot_adapter=cryptobot_adapter
             )
         
-        # Notification Use Cases
-        create_notification = CreateNotificationUseCase(notification_repository=notification_repo)
-        send_notification = SendNotificationUseCase(
-            notification_repository=notification_repo,
-            notification_service=telegram_service,
-        )
+        # Notification Use Cases - TODO: Update to use session_factory
+        create_notification = None  # CreateNotificationUseCase(notification_repository=notification_repo)
+        send_notification = None  # SendNotificationUseCase(notification_repository=notification_repo, notification_sender=telegram_service)
         
-        # Audience Tracking Use Cases
-        create_audience_tracking = CreateAudienceTrackingUseCase(
-            tracking_repository=audience_tracking_repo,
-            instagram_service=hiker_api,
-        )
-        get_audience_tracking_status = GetAudienceTrackingStatusUseCase(
-            tracking_repository=audience_tracking_repo
-        )
-        check_audience_changes = CheckAudienceChangesUseCase(
-            tracking_repository=audience_tracking_repo,
-            instagram_service=hiker_api,
-        )
-        cancel_audience_tracking = CancelAudienceTrackingUseCase(
-            tracking_repository=audience_tracking_repo
-        )
-        renew_audience_tracking = RenewAudienceTrackingUseCase(
-            tracking_repository=audience_tracking_repo
-        )
+        # Audience Tracking Use Cases - TODO: Update to use session_factory
+        create_audience_tracking = None  # CreateAudienceTrackingUseCase(tracking_repository=audience_tracking_repo, instagram_service=hiker_api)
+        get_audience_tracking_status = None  # GetAudienceTrackingStatusUseCase(tracking_repository=audience_tracking_repo)
+        check_audience_changes = None  # CheckAudienceChangesUseCase(tracking_repository=audience_tracking_repo, instagram_service=hiker_api)
+        cancel_audience_tracking = None  # CancelAudienceTrackingUseCase(tracking_repository=audience_tracking_repo)
+        renew_audience_tracking = None  # RenewAudienceTrackingUseCase(tracking_repository=audience_tracking_repo)
         calculate_audience_tracking_price = CalculateAudienceTrackingPriceUseCase()
         
-        # Referral Use Cases
-        generate_referral_code = GenerateReferralCodeUseCase(referral_repository=referral_repo)
-        apply_referral_code = ApplyReferralCodeUseCase(referral_repository=referral_repo)
-        get_referral_stats = GetReferralStatsUseCase(referral_repository=referral_repo)
+        # Referral Use Cases - TODO: Update to use session_factory
+        generate_referral_code = None  # GenerateReferralCodeUseCase(referral_repository=referral_repo)
+        apply_referral_code = None  # ApplyReferralCodeUseCase(referral_repository=referral_repo)
+        get_referral_stats = None  # GetReferralStatsUseCase(referral_repository=referral_repo)
         calculate_referral_reward = CalculateReferralRewardUseCase()
-        request_referral_payout = RequestReferralPayoutUseCase(referral_repository=referral_repo)
-        get_referral_link = GetReferralLinkUseCase(
-            referral_repository=referral_repo,
-            bot_username="your_bot_username",  # TODO: Get from config
-        )
+        request_referral_payout = None  # RequestReferralPayoutUseCase(referral_repository=referral_repo)
+        get_referral_link = None  # GetReferralLinkUseCase(referral_repository=referral_repo, bot_username="your_bot_username")
         
         # Referral Event Handlers
-        referral_reward_earned_handler = ReferralRewardEarnedHandler(
-            send_notification_use_case=send_notification
-        )
+        referral_reward_earned_handler = None  # ReferralRewardEarnedHandler(send_notification_use_case=send_notification)
         
         # Process Referral Reward with event handler
-        process_referral_reward = ProcessReferralRewardUseCase(
-            referral_repository=referral_repo,
-            referral_reward_earned_handler=referral_reward_earned_handler,
-        )
-        
-        # Inject process_referral_reward into complete_payment
-        complete_payment.process_referral_reward_use_case = process_referral_reward
+        process_referral_reward = None  # ProcessReferralRewardUseCase(referral_repository=referral_repo, referral_reward_earned_handler=referral_reward_earned_handler)
         
         return UseCaseContainer(
             # User Management
@@ -351,6 +326,7 @@ def init_container(
     hiker_api_key: str,
     telegram_bot_token: str,
     cryptobot_token: Optional[str] = None,
+    cache_service: Optional[CacheService] = None,
 ) -> DependencyContainer:
     """Initialize global dependency container."""
     global _container
@@ -359,6 +335,7 @@ def init_container(
         hiker_api_key=hiker_api_key,
         telegram_bot_token=telegram_bot_token,
         cryptobot_token=cryptobot_token,
+        cache_service=cache_service,
     )
     return _container
 
