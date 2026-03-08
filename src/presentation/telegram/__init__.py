@@ -1,5 +1,6 @@
 """Telegram presentation layer."""
 
-from src.presentation.telegram.bot import TelegramBot
+# Avoid circular imports - import TelegramBot directly when needed
+# from src.presentation.telegram.bot import TelegramBot
 
 __all__ = ["TelegramBot"]

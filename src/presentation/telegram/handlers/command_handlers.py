@@ -5,7 +5,9 @@ from aiogram.filters import Command, CommandStart
 from aiogram.types import CallbackQuery, Message
 
 from src.infrastructure.logging.logger import get_logger
+from src.presentation.telegram.dependencies import get_container
 from src.presentation.telegram.keyboards.main_menu import get_start_keyboard
+from src.presentation.telegram.formatters.profile_formatter import format_subscription_status
 
 logger = get_logger(__name__)
 
@@ -16,12 +18,36 @@ async def start_command(message: Message) -> None:
         return
 
     user_id = message.from_user.id
+    username = message.from_user.username or ""
+    first_name = message.from_user.first_name or ""
+    last_name = message.from_user.last_name or ""
+    
     logger.info(f"User {user_id} started the bot")
 
-    # TODO: Parse referral code from deep link (message.text.split()[1] if len > 1)
-    # TODO: Register user via RegisterUserUseCase
-    # TODO: Apply referral via ApplyReferralUseCase
-    # TODO: Create trial subscription if new user via CreateSubscriptionUseCase
+    # Get use cases
+    container = get_container()
+    use_cases = container.get_use_cases()
+
+    try:
+        # Register or get existing user
+        user = await use_cases.register_user.execute(
+            telegram_id=user_id,
+            username=username,
+            first_name=first_name,
+            last_name=last_name,
+        )
+        logger.info(f"User registered/retrieved: {user.id}")
+        
+        # TODO: Parse referral code from deep link (message.text.split()[1] if len > 1)
+        # TODO: Apply referral via ApplyReferralUseCase
+        # TODO: Create trial subscription if new user via CreateSubscriptionUseCase
+
+    except Exception as e:
+        logger.error(f"Error registering user {user_id}: {e}")
+        await message.answer(
+            "❌ Произошла ошибка при регистрации. Попробуйте позже."
+        )
+        return
 
     # Delete command message
     try:
@@ -38,9 +64,19 @@ async def show_start_menu(message: Message) -> None:
     if not message.from_user:
         return
 
-    # TODO: Get subscription status via CheckSubscriptionStatusUseCase
-    # For now, show default
-    sub_info = "— Подписка не активна"
+    user_id = message.from_user.id
+    
+    # Get use cases
+    container = get_container()
+    use_cases = container.get_use_cases()
+
+    try:
+        # Get subscription status
+        sub_status = await use_cases.check_subscription_status.execute(user_id)
+        sub_info = format_subscription_status(sub_status)
+    except Exception as e:
+        logger.error(f"Error getting subscription status for user {user_id}: {e}")
+        sub_info = "— Подписка не активна"
 
     text = (
         "👋 Отправь мне <b>имя пользователя</b> или <b>ссылку на профиль</b> "
@@ -133,21 +169,42 @@ async def sub_command(message: Message) -> None:
     if not message.from_user:
         return
 
-    logger.info(f"User {message.from_user.id} requested trackings")
+    user_id = message.from_user.id
+    logger.info(f"User {user_id} requested trackings")
 
-    # TODO: Get user trackings via GetUserTrackingsUseCase
-    text = (
-        "📊 <b>Мои отслеживания</b>\n\n"
-        "У вас нет отслеживаемых аккаунтов\n\n"
-        "💡 Чтобы добавить аккаунт:\n"
-        "1. Найдите профиль через /instagram @username\n"
-        "2. Нажмите кнопку 📊 Отслеживать\n"
-        "3. Выберите что отслеживать (Stories, Posts и т.д.)\n"
-        "4. Настройте интервал проверки\n\n"
-        "🔔 Вы будете получать уведомления о новом контенте!"
-    )
+    # Get use cases
+    container = get_container()
+    use_cases = container.get_use_cases()
 
-    await message.answer(text)
+    try:
+        # Get user trackings
+        trackings = await use_cases.get_user_trackings.execute(user_id)
+        
+        if not trackings:
+            text = (
+                "📊 <b>Мои отслеживания</b>\n\n"
+                "У вас нет отслеживаемых аккаунтов\n\n"
+                "💡 Чтобы добавить аккаунт:\n"
+                "1. Найдите профиль через /instagram @username\n"
+                "2. Нажмите кнопку 📊 Отслеживать\n"
+                "3. Выберите что отслеживать (Stories, Posts и т.д.)\n"
+                "4. Настройте интервал проверки\n\n"
+                "🔔 Вы будете получать уведомления о новом контенте!"
+            )
+        else:
+            text = "📊 <b>Мои отслеживания</b>\n\n"
+            for tracking in trackings:
+                status = "✅ Активно" if tracking.is_active else "⏸ Приостановлено"
+                text += f"• @{tracking.instagram_username} - {status}\n"
+            text += "\n💡 Используйте /instagram @username для управления отслеживанием"
+        
+        await message.answer(text)
+        
+    except Exception as e:
+        logger.error(f"Error getting trackings for user {user_id}: {e}")
+        await message.answer(
+            "❌ Произошла ошибка при получении отслеживаний. Попробуйте позже."
+        )
 
 
 async def ref_command(message: Message) -> None:
@@ -253,16 +310,38 @@ async def subscription_command(message: Message) -> None:
     if not message.from_user:
         return
 
-    logger.info(f"User {message.from_user.id} requested subscription status")
+    user_id = message.from_user.id
+    logger.info(f"User {user_id} requested subscription status")
 
-    # TODO: Get subscription via GetSubscriptionUseCase
-    text = (
-        "💎 <b>Ваша подписка</b>\n\n"
-        "❌ У вас нет активной подписки\n\n"
-        "Используйте /buy для покупки подписки"
-    )
+    # Get use cases
+    container = get_container()
+    use_cases = container.get_use_cases()
 
-    await message.answer(text)
+    try:
+        # Get subscription status
+        sub_status = await use_cases.check_subscription_status.execute(user_id)
+        
+        if sub_status.is_active:
+            text = (
+                "💎 <b>Ваша подписка</b>\n\n"
+                f"✅ Активна до: {sub_status.expires_at.strftime('%d.%m.%Y')}\n"
+                f"📦 План: {sub_status.plan_name}\n\n"
+                "Используйте /sub для просмотра отслеживаний"
+            )
+        else:
+            text = (
+                "💎 <b>Ваша подписка</b>\n\n"
+                "❌ У вас нет активной подписки\n\n"
+                "Используйте /buy для покупки подписки"
+            )
+        
+        await message.answer(text)
+        
+    except Exception as e:
+        logger.error(f"Error getting subscription for user {user_id}: {e}")
+        await message.answer(
+            "❌ Произошла ошибка при получении подписки. Попробуйте позже."
+        )
 
 
 async def help_command(message: Message) -> None:

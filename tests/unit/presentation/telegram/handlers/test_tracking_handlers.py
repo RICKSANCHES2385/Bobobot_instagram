@@ -1,7 +1,7 @@
 ﻿"""Tests for tracking handlers."""
 
 import pytest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 from aiogram.types import CallbackQuery, User
 
@@ -48,17 +48,33 @@ class TestTrackingHandlers:
         
         mock_callback.answer.assert_called_once()
 
-    async def test_handle_tracking_interval_set(self, mock_callback):
+    async def test_handle_tracking_interval_set(self, mock_callback, mock_container):
         """Test handle_tracking_interval_set."""
         mock_callback.data = "track_interval_stories_1h_123_cristiano"
+        
+        # Setup mocks
+        mock_use_cases = mock_container.get_use_cases.return_value
+        mock_check_sub = AsyncMock()
+        mock_check_sub.execute = AsyncMock(return_value=MagicMock(is_active=True))
+        mock_use_cases.check_subscription_status = mock_check_sub
+        
+        mock_start_tracking = AsyncMock()
+        mock_start_tracking.execute = AsyncMock()
+        mock_use_cases.start_tracking = mock_start_tracking
         
         await handle_tracking_interval_set(mock_callback)
         
         mock_callback.answer.assert_called_once()
 
-    async def test_tracking_stop_callback(self, mock_callback):
+    async def test_tracking_stop_callback(self, mock_callback, mock_container):
         """Test tracking_stop_callback."""
         mock_callback.data = "unsubscribe_tracking_cristiano"
+        
+        # Setup mocks
+        mock_use_cases = mock_container.get_use_cases.return_value
+        mock_get_trackings = AsyncMock()
+        mock_get_trackings.execute = AsyncMock(return_value=[])
+        mock_use_cases.get_user_trackings = mock_get_trackings
         
         await tracking_stop_callback(mock_callback)
         

@@ -1,9 +1,11 @@
 """Payment handlers for Telegram bot."""
 
+from uuid import UUID
 from aiogram import Dispatcher, F
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice, PreCheckoutQuery
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice, PreCheckoutQuery, Message
 
 from src.infrastructure.logging.logger import get_logger
+from src.presentation.telegram.dependencies import get_container
 
 logger = get_logger(__name__)
 
@@ -95,7 +97,7 @@ async def payment_stars_callback(callback: CallbackQuery) -> None:
 
 async def handle_buy_callback(callback: CallbackQuery) -> None:
     """Handle buy_{plan_code} callback - create Stars invoice."""
-    if not callback.data or not callback.from_user:
+    if not callback.data or not callback.from_user or not callback.message:
         return
 
     await callback.answer()
@@ -107,12 +109,14 @@ async def handle_buy_callback(callback: CallbackQuery) -> None:
         return
 
     plan_code = parts[1]
+    user_id = callback.from_user.id
 
-    logger.info(f"User {callback.from_user.id} selected plan {plan_code}")
+    logger.info(f"User {user_id} selected plan {plan_code}")
 
-    # TODO: Get plan from database
-    # TODO: Create payment via CreatePaymentUseCase
-    
+    # Get use cases
+    container = get_container()
+    use_cases = container.get_use_cases()
+
     # Plan mapping
     plans = {
         "1m": {"name": "1 месяц", "price": 299, "days": 30},
@@ -126,24 +130,52 @@ async def handle_buy_callback(callback: CallbackQuery) -> None:
         await callback.answer("❌ Неверный тариф", show_alert=True)
         return
 
-    # TODO: Send invoice via bot.send_invoice
-    # For now, show confirmation
-    text = (
-        f"⭐ <b>Подписка Безлимит - {plan['name']}</b>\n\n"
-        f"💰 Цена: {plan['price']} Stars\n"
-        f"📅 Период: {plan['days']} дней\n\n"
-        "Нажмите кнопку ниже для оплаты"
-    )
-
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"💳 Оплатить {plan['price']} ⭐", callback_data=f"pay_stars_{plan_code}")],
-        [InlineKeyboardButton(text="◀️ Назад", callback_data="payment_stars")]
-    ])
-
     try:
-        await callback.message.edit_text(text, reply_markup=keyboard)
-    except Exception:
-        await callback.message.answer(text, reply_markup=keyboard)
+        # Create payment
+        from src.application.payment.dtos import CreatePaymentCommand
+        from src.domain.payment.value_objects.payment_method import PaymentMethod
+        from src.domain.payment.value_objects.currency import Currency
+        
+        command = CreatePaymentCommand(
+            user_id=user_id,
+            amount=plan['price'],
+            currency=Currency.STARS,
+            payment_method=PaymentMethod.TELEGRAM_STARS,
+            description=f"Подписка Безлимит - {plan['name']}",
+            metadata={"plan_code": plan_code, "days": plan['days']}
+        )
+        
+        payment = await use_cases.create_payment.execute(command)
+        
+        # Send invoice
+        from aiogram.types import LabeledPrice
+        
+        prices = [LabeledPrice(label=f"Подписка {plan['name']}", amount=plan['price'])]
+        
+        # Get bot from callback
+        bot = callback.bot
+        
+        await bot.send_invoice(
+            chat_id=user_id,
+            title=f"Подписка Безлимит - {plan['name']}",
+            description=f"Безлимитный доступ на {plan['days']} дней",
+            payload=str(payment.id),  # Payment ID as payload
+            provider_token="",  # Empty for Stars
+            currency="XTR",  # Stars currency
+            prices=prices
+        )
+        
+        await callback.message.answer(
+            "✅ Счёт отправлен!\n\n"
+            "Нажмите на кнопку оплаты выше"
+        )
+        
+    except Exception as e:
+        logger.error(f"Error creating payment for user {user_id}: {e}")
+        await callback.message.answer(
+            "❌ Не удалось создать счёт\n\n"
+            "Попробуйте позже или обратитесь в поддержку"
+        )
 
 
 async def precheckout_callback(query: PreCheckoutQuery) -> None:
@@ -155,24 +187,73 @@ async def precheckout_callback(query: PreCheckoutQuery) -> None:
     await query.answer(ok=True)
 
 
-async def successful_payment_callback(callback: CallbackQuery) -> None:
+async def successful_payment_callback(message: Message) -> None:
     """Handle successful Stars payment."""
-    if not callback.from_user:
+    if not message.from_user or not message.successful_payment:
         return
 
-    logger.info(f"Successful payment from user {callback.from_user.id}")
+    user_id = message.from_user.id
+    payment_info = message.successful_payment
 
-    # TODO: Process payment via ProcessPaymentUseCase
-    # TODO: Activate subscription via CreateSubscriptionUseCase
+    logger.info(f"Successful payment from user {user_id}: {payment_info.telegram_payment_charge_id}")
 
-    text = (
-        "✅ <b>Оплата успешна!</b>\n\n"
-        "Ваша подписка активирована\n"
-        "Спасибо за покупку! 🎉\n\n"
-        "Теперь вам доступны все функции бота"
-    )
+    # Get use cases
+    container = get_container()
+    use_cases = container.get_use_cases()
 
-    await callback.message.answer(text)
+    try:
+        # Get payment ID from payload
+        payment_id = UUID(payment_info.invoice_payload)
+        
+        # Complete payment
+        from src.application.payment.dtos import CompletePaymentCommand
+        
+        command = CompletePaymentCommand(
+            payment_id=payment_id,
+            external_transaction_id=payment_info.telegram_payment_charge_id,
+            metadata={"provider_payment_charge_id": payment_info.provider_payment_charge_id}
+        )
+        
+        payment = await use_cases.complete_payment.execute(command)
+        
+        # Get plan info from metadata
+        plan_code = payment.metadata.get("plan_code", "1m")
+        days = payment.metadata.get("days", 30)
+        
+        # Create subscription
+        from src.application.subscription.dtos import CreateSubscriptionCommand
+        from src.domain.subscription.value_objects.subscription_type import SubscriptionType
+        from datetime import datetime, timedelta
+        
+        sub_command = CreateSubscriptionCommand(
+            user_id=user_id,
+            subscription_type=SubscriptionType.PREMIUM,
+            start_date=datetime.utcnow(),
+            end_date=datetime.utcnow() + timedelta(days=days),
+            auto_renew=False
+        )
+        
+        subscription = await use_cases.create_subscription.execute(sub_command)
+        
+        text = (
+            "✅ <b>Оплата успешна!</b>\n\n"
+            f"Ваша подписка активирована до {subscription.end_date.strftime('%d.%m.%Y')}\n"
+            "Спасибо за покупку! 🎉\n\n"
+            "Теперь вам доступны все функции бота:\n"
+            "• Просмотр stories и posts\n"
+            "• Скачивание медиа\n"
+            "• Отслеживание аккаунтов\n"
+            "• Без ограничений"
+        )
+
+        await message.answer(text)
+        
+    except Exception as e:
+        logger.error(f"Error processing successful payment for user {user_id}: {e}")
+        await message.answer(
+            "⚠️ Оплата получена, но возникла ошибка при активации подписки\n\n"
+            "Обратитесь в поддержку: /support"
+        )
 
 
 # Robokassa

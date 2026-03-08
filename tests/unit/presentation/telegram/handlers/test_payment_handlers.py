@@ -1,7 +1,7 @@
 """Tests for payment handlers."""
 
 import pytest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 from aiogram.types import CallbackQuery, User
 
@@ -64,16 +64,23 @@ class TestPaymentHandlers:
         mock_callback.answer.assert_called_once()
         assert "CryptoBot" in str(mock_callback.message.edit_text.call_args or mock_callback.message.answer.call_args)
 
-    async def test_handle_buy_callback_valid_plan(self, mock_callback):
+    async def test_handle_buy_callback_valid_plan(self, mock_callback, mock_container):
         """Test handle_buy_callback with valid plan."""
         mock_callback.data = "buy_1m"
+        mock_callback.bot = AsyncMock()
+        mock_callback.bot.send_invoice = AsyncMock()
+        
+        # Setup mocks
+        mock_use_cases = mock_container.get_use_cases.return_value
+        mock_create_payment = AsyncMock()
+        mock_create_payment.execute = AsyncMock(return_value=MagicMock(id="payment_id"))
+        mock_use_cases.create_payment = mock_create_payment
         
         await handle_buy_callback(mock_callback)
         
         mock_callback.answer.assert_called_once()
-        assert mock_callback.message.edit_text.called or mock_callback.message.answer.called
 
-    async def test_handle_buy_callback_invalid_plan(self, mock_callback):
+    async def test_handle_buy_callback_invalid_plan(self, mock_callback, mock_container):
         """Test handle_buy_callback with invalid plan."""
         mock_callback.data = "buy_invalid"
         
