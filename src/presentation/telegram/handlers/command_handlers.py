@@ -67,7 +67,45 @@ async def start_command(message: Message) -> None:
                 # Don't show error to user, just log it
         
         # Create trial subscription if new user
-        # TODO: Check if user is new and create trial via CreateSubscriptionUseCase
+        # Check if user has any subscription
+        try:
+            subscription = await use_cases.get_subscription.execute(user_id)
+            has_subscription = subscription is not None
+        except Exception:
+            has_subscription = False
+        
+        # Create 7-day trial for new users without subscription
+        if not has_subscription:
+            try:
+                from src.application.subscription.dtos import CreateSubscriptionCommand
+                
+                trial_command = CreateSubscriptionCommand(
+                    user_id=user_id,
+                    subscription_type="trial",
+                    days=7,
+                    price=0.0
+                )
+                
+                trial_subscription = await use_cases.create_subscription.execute(trial_command)
+                
+                logger.info(f"Created 7-day trial subscription for new user {user_id}")
+                
+                # Send welcome message with trial info
+                await message.answer(
+                    "🎉 <b>Добро пожаловать!</b>\n\n"
+                    "✨ Вам активирован <b>пробный период на 7 дней</b>!\n\n"
+                    "В течение этого времени вам доступны:\n"
+                    "• Просмотр профилей Instagram\n"
+                    "• Просмотр stories и постов\n"
+                    "• Скачивание медиа\n"
+                    "• Базовое отслеживание аккаунтов\n\n"
+                    f"⏰ Пробный период до: {trial_subscription.end_date.strftime('%d.%m.%Y')}\n\n"
+                    "После окончания пробного периода вы можете оформить подписку.",
+                    parse_mode="HTML"
+                )
+            except Exception as e:
+                logger.error(f"Failed to create trial subscription for user {user_id}: {e}")
+                # Don't block user if trial creation fails
 
     except Exception as e:
         logger.error(f"Error registering user {user_id}: {e}")

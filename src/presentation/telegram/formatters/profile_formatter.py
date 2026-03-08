@@ -151,24 +151,33 @@ def format_subscription_status(
     expires_at: Optional[datetime] = None,
     is_trial: bool = False,
 ) -> str:
-    """Format subscription status."""
+    """Format subscription status with improved date formatting."""
+    from .date_formatter import DateFormatter
+    
     if not is_active:
-        return "— Подписка не активна"
+        return "💤 <b>Подписка:</b> не активна"
     
     if is_trial:
-        return "— Пробный период (3 дня)"
+        if expires_at:
+            formatted_date = DateFormatter.format_datetime(expires_at)
+            time_remaining = DateFormatter.format_time_remaining(expires_at)
+            return (
+                f"🎁 <b>Пробный период</b>\n"
+                f"⏰ До: {formatted_date}\n"
+                f"📅 Осталось: {time_remaining}"
+            )
+        return "🎁 <b>Пробный период</b> (3 дня)"
     
     lines = []
     if plan_name:
-        lines.append(f"— {plan_name}")
+        lines.append(f"💎 <b>{plan_name}</b>")
     else:
-        lines.append("— Подписка активна")
+        lines.append("💎 <b>Подписка активна</b>")
     
     if expires_at:
-        days_left = (expires_at - datetime.now()).days
-        if days_left > 0:
-            lines.append(f"— Осталось: {days_left} дн")
-        else:
-            lines.append("— Истекает сегодня")
+        formatted_date = DateFormatter.format_datetime(expires_at)
+        time_remaining = DateFormatter.format_time_remaining(expires_at)
+        lines.append(f"⏰ До: {formatted_date}")
+        lines.append(f"📅 Осталось: {time_remaining}")
     
     return "\n".join(lines)
