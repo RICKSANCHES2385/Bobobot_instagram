@@ -248,6 +248,75 @@ async def successful_payment_callback(message: Message) -> None:
         )
 
 
+async def successful_audience_tracking_payment(message: Message, target_username: str, target_user_id: str) -> None:
+    """Handle successful Audience Tracking payment.
+    
+    Args:
+        message: Message with successful payment
+        target_username: Instagram username to track
+        target_user_id: Instagram user ID
+    """
+    if not message.from_user or not message.successful_payment:
+        return
+
+    user_id = message.from_user.id
+    payment_info = message.successful_payment
+
+    logger.info(f"Successful audience tracking payment from user {user_id}")
+
+    # Get use cases
+    container = get_container()
+    use_cases = container.get_use_cases()
+
+    try:
+        # Get payment ID from payload
+        payment_id = UUID(payment_info.invoice_payload)
+        
+        # Complete payment
+        from src.application.payment.dtos import CompletePaymentCommand
+        
+        command = CompletePaymentCommand(
+            payment_id=payment_id,
+            transaction_id=payment_info.telegram_payment_charge_id
+        )
+        
+        payment = await use_cases.complete_payment.execute(command)
+        
+        # Create audience tracking subscription
+        from src.application.audience_tracking.dtos import CreateAudienceTrackingDTO
+        
+        tracking_dto = CreateAudienceTrackingDTO(
+            user_id=user_id,
+            target_username=target_username,
+            target_user_id=target_user_id,
+            currency="XTR",
+            payment_id=payment.id,
+            duration_days=30
+        )
+        
+        tracking = await use_cases.create_audience_tracking.execute(tracking_dto)
+        
+        text = (
+            "✅ <b>Audience Tracking активирован!</b>\n\n"
+            f"Профиль: @{target_username}\n"
+            f"Активен до: {tracking.expires_at.strftime('%d.%m.%Y %H:%M')}\n\n"
+            "🔔 Вы будете получать уведомления об изменениях:\n"
+            "• Новые подписчики\n"
+            "• Отписавшиеся\n"
+            "• Изменения в подписках\n\n"
+            "Спасибо за покупку! 🎉"
+        )
+
+        await message.answer(text)
+        
+    except Exception as e:
+        logger.error(f"Error processing audience tracking payment for user {user_id}: {e}")
+        await message.answer(
+            "⚠️ Оплата получена, но возникла ошибка при активации отслеживания\n\n"
+            "Обратитесь в поддержку: /support"
+        )
+
+
 # Robokassa
 
 def get_robokassa_plans_keyboard() -> InlineKeyboardMarkup:
@@ -688,6 +757,7 @@ def register_payment_handlers(dp: Dispatcher) -> None:
     dp.callback_query.register(payment_stars_callback, F.data == "payment_stars")
     dp.callback_query.register(handle_buy_callback, F.data.startswith("buy_"))
     dp.pre_checkout_query.register(precheckout_callback)
+    dp.message.register(successful_payment_callback, F.successful_payment)
     
     # Robokassa payment
     dp.callback_query.register(payment_robokassa_callback, F.data == "payment_robokassa")

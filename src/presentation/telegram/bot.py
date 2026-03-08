@@ -18,6 +18,7 @@ from src.presentation.telegram.handlers import (
     register_instagram_handlers,
     register_payment_handlers,
     register_tracking_handlers,
+    register_audience_tracking_handlers,
 )
 from src.presentation.telegram.middleware.subscription_check import SubscriptionCheckMiddleware
 from src.presentation.telegram.middleware.rate_limit import RateLimitMiddleware
@@ -137,6 +138,7 @@ class TelegramBot:
         register_command_handlers(self.dp)
         register_instagram_handlers(self.dp)
         register_tracking_handlers(self.dp)
+        register_audience_tracking_handlers(self.dp)
         register_payment_handlers(self.dp)
         logger.info("Handlers registered")
 

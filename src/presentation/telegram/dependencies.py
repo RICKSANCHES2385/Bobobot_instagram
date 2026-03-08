@@ -38,12 +38,20 @@ from src.application.payment.use_cases.get_payment_status import GetPaymentStatu
 from src.application.notification.use_cases.create_notification import CreateNotificationUseCase
 from src.application.notification.use_cases.send_notification import SendNotificationUseCase
 
+from src.application.audience_tracking.use_cases.create_tracking import CreateAudienceTrackingUseCase
+from src.application.audience_tracking.use_cases.get_tracking_status import GetAudienceTrackingStatusUseCase
+from src.application.audience_tracking.use_cases.check_audience_changes import CheckAudienceChangesUseCase
+from src.application.audience_tracking.use_cases.cancel_tracking import CancelAudienceTrackingUseCase
+from src.application.audience_tracking.use_cases.renew_tracking import RenewAudienceTrackingUseCase
+from src.application.audience_tracking.use_cases.calculate_price import CalculateAudienceTrackingPriceUseCase
+
 # Infrastructure Layer
 from src.infrastructure.persistence.repositories.sqlalchemy_user_repository import SQLAlchemyUserRepository
 from src.infrastructure.persistence.repositories.sqlalchemy_subscription_repository import SQLAlchemySubscriptionRepository
 from src.infrastructure.persistence.repositories.sqlalchemy_payment_repository import SQLAlchemyPaymentRepository
 from src.infrastructure.persistence.repositories.sqlalchemy_content_tracking_repository import SQLAlchemyContentTrackingRepository
 from src.infrastructure.persistence.repositories.sqlalchemy_notification_repository import SQLAlchemyNotificationRepository
+from src.infrastructure.persistence.repositories.sqlalchemy_audience_tracking_repository import SqlAlchemyAudienceTrackingRepository
 
 from src.infrastructure.external_services.hiker_api.hiker_api_adapter import HikerAPIAdapter
 from src.infrastructure.messaging.telegram_notification_sender import TelegramNotificationSender
@@ -90,6 +98,14 @@ class UseCaseContainer:
     # Notification
     create_notification: CreateNotificationUseCase
     send_notification: SendNotificationUseCase
+    
+    # Audience Tracking
+    create_audience_tracking: CreateAudienceTrackingUseCase
+    get_audience_tracking_status: GetAudienceTrackingStatusUseCase
+    check_audience_changes: CheckAudienceChangesUseCase
+    cancel_audience_tracking: CancelAudienceTrackingUseCase
+    renew_audience_tracking: RenewAudienceTrackingUseCase
+    calculate_audience_tracking_price: CalculateAudienceTrackingPriceUseCase
 
 
 class DependencyContainer:
@@ -125,6 +141,7 @@ class DependencyContainer:
         payment_repo = SQLAlchemyPaymentRepository(self.session_factory)
         tracking_repo = SQLAlchemyContentTrackingRepository(self.session_factory)
         notification_repo = SQLAlchemyNotificationRepository(self.session_factory)
+        audience_tracking_repo = SqlAlchemyAudienceTrackingRepository(self.session_factory)
         
         # Create external services
         hiker_api = HikerAPIAdapter(api_key=self.hiker_api_key)
@@ -186,6 +203,26 @@ class DependencyContainer:
             notification_service=telegram_service,
         )
         
+        # Audience Tracking Use Cases
+        create_audience_tracking = CreateAudienceTrackingUseCase(
+            tracking_repository=audience_tracking_repo,
+            instagram_service=hiker_api,
+        )
+        get_audience_tracking_status = GetAudienceTrackingStatusUseCase(
+            tracking_repository=audience_tracking_repo
+        )
+        check_audience_changes = CheckAudienceChangesUseCase(
+            tracking_repository=audience_tracking_repo,
+            instagram_service=hiker_api,
+        )
+        cancel_audience_tracking = CancelAudienceTrackingUseCase(
+            tracking_repository=audience_tracking_repo
+        )
+        renew_audience_tracking = RenewAudienceTrackingUseCase(
+            tracking_repository=audience_tracking_repo
+        )
+        calculate_audience_tracking_price = CalculateAudienceTrackingPriceUseCase()
+        
         return UseCaseContainer(
             # User Management
             register_user=register_user,
@@ -219,6 +256,13 @@ class DependencyContainer:
             # Notification
             create_notification=create_notification,
             send_notification=send_notification,
+            # Audience Tracking
+            create_audience_tracking=create_audience_tracking,
+            get_audience_tracking_status=get_audience_tracking_status,
+            check_audience_changes=check_audience_changes,
+            cancel_audience_tracking=cancel_audience_tracking,
+            renew_audience_tracking=renew_audience_tracking,
+            calculate_audience_tracking_price=calculate_audience_tracking_price,
         )
 
 
