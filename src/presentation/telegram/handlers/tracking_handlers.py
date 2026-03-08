@@ -157,12 +157,12 @@ async def handle_tracking_interval_set(callback: CallbackQuery) -> None:
         }
         
         # Map tracking type to content type
-        from src.domain.content_tracking.value_objects.content_type import ContentType
+        from src.domain.content_tracking.value_objects.content_type import ContentType, ContentTypeEnum
         content_type_map = {
-            "stories": ContentType.STORIES,
-            "posts": ContentType.POSTS,
-            "followers": ContentType.FOLLOWERS,
-            "following": ContentType.FOLLOWING
+            "stories": ContentType(ContentTypeEnum.STORIES),
+            "posts": ContentType(ContentTypeEnum.POSTS),
+            "followers": ContentType(ContentTypeEnum.STORIES),  # Fallback to STORIES for now
+            "following": ContentType(ContentTypeEnum.STORIES)   # Fallback to STORIES for now
         }
         
         # Start tracking

@@ -133,16 +133,12 @@ async def handle_buy_callback(callback: CallbackQuery) -> None:
     try:
         # Create payment
         from src.application.payment.dtos import CreatePaymentCommand
-        from src.domain.payment.value_objects.payment_method import PaymentMethod
-        from src.domain.payment.value_objects.currency import Currency
         
         command = CreatePaymentCommand(
             user_id=user_id,
             amount=plan['price'],
-            currency=Currency.STARS,
-            payment_method=PaymentMethod.TELEGRAM_STARS,
-            description=f"Подписка Безлимит - {plan['name']}",
-            metadata={"plan_code": plan_code, "days": plan['days']}
+            currency="XTR",
+            method="telegram_stars"
         )
         
         payment = await use_cases.create_payment.execute(command)
@@ -210,8 +206,7 @@ async def successful_payment_callback(message: Message) -> None:
         
         command = CompletePaymentCommand(
             payment_id=payment_id,
-            external_transaction_id=payment_info.telegram_payment_charge_id,
-            metadata={"provider_payment_charge_id": payment_info.provider_payment_charge_id}
+            transaction_id=payment_info.telegram_payment_charge_id
         )
         
         payment = await use_cases.complete_payment.execute(command)
@@ -222,15 +217,12 @@ async def successful_payment_callback(message: Message) -> None:
         
         # Create subscription
         from src.application.subscription.dtos import CreateSubscriptionCommand
-        from src.domain.subscription.value_objects.subscription_type import SubscriptionType
-        from datetime import datetime, timedelta
         
         sub_command = CreateSubscriptionCommand(
             user_id=user_id,
-            subscription_type=SubscriptionType.PREMIUM,
-            start_date=datetime.utcnow(),
-            end_date=datetime.utcnow() + timedelta(days=days),
-            auto_renew=False
+            subscription_type="premium",
+            days=days,
+            price=payment.amount
         )
         
         subscription = await use_cases.create_subscription.execute(sub_command)

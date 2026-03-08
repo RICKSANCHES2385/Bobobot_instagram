@@ -5,7 +5,7 @@ from typing import List, Dict, Any, Optional
 
 
 def format_followers_list(
-    followers: List[Dict[str, Any]],
+    followers: List[Any],  # Can be Dict or FollowerDTO
     username: str,
     total_count: int,
 ) -> str:
@@ -15,14 +15,21 @@ def format_followers_list(
     lines.append("")
     
     for i, follower in enumerate(followers[:50], 1):
-        follower_username = follower.get("username", "unknown")
-        full_name = follower.get("full_name", "")
+        # Support both Dict and DTO
+        if hasattr(follower, 'username'):
+            follower_username = follower.username
+            full_name = follower.full_name or ""
+            is_verified = follower.is_verified
+        else:
+            follower_username = follower.get("username", "unknown")
+            full_name = follower.get("full_name", "")
+            is_verified = follower.get("is_verified", False)
         
         line = f"{i}. @{follower_username}"
         if full_name:
             line += f" ({full_name})"
         
-        if follower.get("is_verified"):
+        if is_verified:
             line += " ✓"
         
         lines.append(line)
@@ -36,7 +43,7 @@ def format_followers_list(
 
 
 def format_following_list(
-    following: List[Dict[str, Any]],
+    following: List[Any],  # Can be Dict or FollowerDTO
     username: str,
     total_count: int,
 ) -> str:
@@ -46,14 +53,21 @@ def format_following_list(
     lines.append("")
     
     for i, user in enumerate(following[:50], 1):
-        user_username = user.get("username", "unknown")
-        full_name = user.get("full_name", "")
+        # Support both Dict and DTO
+        if hasattr(user, 'username'):
+            user_username = user.username
+            full_name = user.full_name or ""
+            is_verified = user.is_verified
+        else:
+            user_username = user.get("username", "unknown")
+            full_name = user.get("full_name", "")
+            is_verified = user.get("is_verified", False)
         
         line = f"{i}. @{user_username}"
         if full_name:
             line += f" ({full_name})"
         
-        if user.get("is_verified"):
+        if is_verified:
             line += " ✓"
         
         lines.append(line)
