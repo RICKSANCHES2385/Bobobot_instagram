@@ -45,6 +45,15 @@ from src.application.audience_tracking.use_cases.cancel_tracking import CancelAu
 from src.application.audience_tracking.use_cases.renew_tracking import RenewAudienceTrackingUseCase
 from src.application.audience_tracking.use_cases.calculate_price import CalculateAudienceTrackingPriceUseCase
 
+from src.application.referral.use_cases.generate_referral_code import GenerateReferralCodeUseCase
+from src.application.referral.use_cases.apply_referral_code import ApplyReferralCodeUseCase
+from src.application.referral.use_cases.get_referral_stats import GetReferralStatsUseCase
+from src.application.referral.use_cases.calculate_referral_reward import CalculateReferralRewardUseCase
+from src.application.referral.use_cases.request_referral_payout import RequestReferralPayoutUseCase
+from src.application.referral.use_cases.get_referral_link import GetReferralLinkUseCase
+from src.application.referral.use_cases.process_referral_reward import ProcessReferralRewardUseCase
+from src.application.referral.event_handlers.referral_reward_earned_handler import ReferralRewardEarnedHandler
+
 # Infrastructure Layer
 from src.infrastructure.persistence.repositories.sqlalchemy_user_repository import SQLAlchemyUserRepository
 from src.infrastructure.persistence.repositories.sqlalchemy_subscription_repository import SQLAlchemySubscriptionRepository
@@ -52,6 +61,7 @@ from src.infrastructure.persistence.repositories.sqlalchemy_payment_repository i
 from src.infrastructure.persistence.repositories.sqlalchemy_content_tracking_repository import SQLAlchemyContentTrackingRepository
 from src.infrastructure.persistence.repositories.sqlalchemy_notification_repository import SQLAlchemyNotificationRepository
 from src.infrastructure.persistence.repositories.sqlalchemy_audience_tracking_repository import SqlAlchemyAudienceTrackingRepository
+from src.infrastructure.persistence.repositories.sqlalchemy_referral_repository import SqlAlchemyReferralRepository
 
 from src.infrastructure.external_services.hiker_api.hiker_api_adapter import HikerAPIAdapter
 from src.infrastructure.messaging.telegram_notification_sender import TelegramNotificationSender
@@ -106,6 +116,15 @@ class UseCaseContainer:
     cancel_audience_tracking: CancelAudienceTrackingUseCase
     renew_audience_tracking: RenewAudienceTrackingUseCase
     calculate_audience_tracking_price: CalculateAudienceTrackingPriceUseCase
+    
+    # Referral
+    generate_referral_code: GenerateReferralCodeUseCase
+    apply_referral_code: ApplyReferralCodeUseCase
+    get_referral_stats: GetReferralStatsUseCase
+    calculate_referral_reward: CalculateReferralRewardUseCase
+    request_referral_payout: RequestReferralPayoutUseCase
+    get_referral_link: GetReferralLinkUseCase
+    process_referral_reward: ProcessReferralRewardUseCase
 
 
 class DependencyContainer:
@@ -142,6 +161,7 @@ class DependencyContainer:
         tracking_repo = SQLAlchemyContentTrackingRepository(self.session_factory)
         notification_repo = SQLAlchemyNotificationRepository(self.session_factory)
         audience_tracking_repo = SqlAlchemyAudienceTrackingRepository(self.session_factory)
+        referral_repo = SqlAlchemyReferralRepository(self.session_factory)
         
         # Create external services
         hiker_api = HikerAPIAdapter(api_key=self.hiker_api_key)
@@ -194,6 +214,8 @@ class DependencyContainer:
             subscription_repository=subscription_repo,
             user_repository=user_repo,
         )
+        # Inject referral reward processing (will be set after creating process_referral_reward)
+        complete_payment.process_referral_reward_use_case = None  # Will be set below
         get_payment_status = GetPaymentStatusUseCase(payment_repository=payment_repo)
         
         # Notification Use Cases
@@ -222,6 +244,31 @@ class DependencyContainer:
             tracking_repository=audience_tracking_repo
         )
         calculate_audience_tracking_price = CalculateAudienceTrackingPriceUseCase()
+        
+        # Referral Use Cases
+        generate_referral_code = GenerateReferralCodeUseCase(referral_repository=referral_repo)
+        apply_referral_code = ApplyReferralCodeUseCase(referral_repository=referral_repo)
+        get_referral_stats = GetReferralStatsUseCase(referral_repository=referral_repo)
+        calculate_referral_reward = CalculateReferralRewardUseCase()
+        request_referral_payout = RequestReferralPayoutUseCase(referral_repository=referral_repo)
+        get_referral_link = GetReferralLinkUseCase(
+            referral_repository=referral_repo,
+            bot_username="your_bot_username",  # TODO: Get from config
+        )
+        
+        # Referral Event Handlers
+        referral_reward_earned_handler = ReferralRewardEarnedHandler(
+            send_notification_use_case=send_notification
+        )
+        
+        # Process Referral Reward with event handler
+        process_referral_reward = ProcessReferralRewardUseCase(
+            referral_repository=referral_repo,
+            referral_reward_earned_handler=referral_reward_earned_handler,
+        )
+        
+        # Inject process_referral_reward into complete_payment
+        complete_payment.process_referral_reward_use_case = process_referral_reward
         
         return UseCaseContainer(
             # User Management
@@ -263,6 +310,14 @@ class DependencyContainer:
             cancel_audience_tracking=cancel_audience_tracking,
             renew_audience_tracking=renew_audience_tracking,
             calculate_audience_tracking_price=calculate_audience_tracking_price,
+            # Referral
+            generate_referral_code=generate_referral_code,
+            apply_referral_code=apply_referral_code,
+            get_referral_stats=get_referral_stats,
+            calculate_referral_reward=calculate_referral_reward,
+            request_referral_payout=request_referral_payout,
+            get_referral_link=get_referral_link,
+            process_referral_reward=process_referral_reward,
         )
 
 

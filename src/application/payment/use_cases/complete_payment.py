@@ -1,5 +1,6 @@
 """Complete payment use case."""
 from dataclasses import dataclass
+from typing import Optional
 
 from ...shared.use_case import UseCase
 from ..dtos import CompletePaymentCommand, PaymentDTO
@@ -13,6 +14,7 @@ class CompletePaymentUseCase(UseCase[CompletePaymentCommand, PaymentDTO]):
     """Use case for completing a payment."""
     
     payment_repository: IPaymentRepository
+    process_referral_reward_use_case: Optional[object] = None  # ProcessReferralRewardUseCase
     
     async def execute(self, command: CompletePaymentCommand) -> PaymentDTO:
         """Execute the use case.
@@ -39,6 +41,19 @@ class CompletePaymentUseCase(UseCase[CompletePaymentCommand, PaymentDTO]):
         
         # Save payment
         await self.payment_repository.save(payment)
+        
+        # Process referral reward if applicable
+        if self.process_referral_reward_use_case:
+            try:
+                await self.process_referral_reward_use_case.execute(
+                    referred_user_id=int(payment.user_id.value),
+                    payment_id=int(payment.id.value),
+                    payment_amount=payment.amount.amount,
+                    currency=payment.amount.currency,
+                )
+            except Exception:
+                # Don't fail payment if referral processing fails
+                pass
         
         # Return DTO
         return PaymentDTO(

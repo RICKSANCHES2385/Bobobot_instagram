@@ -28,6 +28,12 @@ async def start_command(message: Message) -> None:
     container = get_container()
     use_cases = container.get_use_cases()
 
+    # Parse referral code from deep link
+    referral_code = None
+    if message.text and len(message.text.split()) > 1:
+        referral_code = message.text.split()[1]
+        logger.info(f"User {user_id} started with referral code: {referral_code}")
+
     try:
         # Register or get existing user
         user = await use_cases.register_user.execute(
@@ -38,9 +44,30 @@ async def start_command(message: Message) -> None:
         )
         logger.info(f"User registered/retrieved: {user.id}")
         
-        # TODO: Parse referral code from deep link (message.text.split()[1] if len > 1)
-        # TODO: Apply referral via ApplyReferralUseCase
-        # TODO: Create trial subscription if new user via CreateSubscriptionUseCase
+        # Apply referral code if provided
+        if referral_code:
+            try:
+                from src.application.referral.dtos import ApplyReferralCodeDTO
+                dto = ApplyReferralCodeDTO(
+                    referred_user_id=user_id,
+                    referral_code=referral_code,
+                )
+                await use_cases.apply_referral_code.execute(dto)
+                logger.info(f"Referral code {referral_code} applied for user {user_id}")
+                
+                # Send success message
+                await message.answer(
+                    "✅ <b>Реферальный код применен!</b>\n\n"
+                    f"Вы использовали код: <code>{referral_code}</code>\n\n"
+                    "Ваш реферер получит бонус после вашей первой оплаты. Спасибо за регистрацию!",
+                    parse_mode="HTML"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to apply referral code {referral_code}: {e}")
+                # Don't show error to user, just log it
+        
+        # Create trial subscription if new user
+        # TODO: Check if user is new and create trial via CreateSubscriptionUseCase
 
     except Exception as e:
         logger.error(f"Error registering user {user_id}: {e}")
@@ -212,7 +239,8 @@ async def ref_command(message: Message) -> None:
     if not message.from_user:
         return
 
-    logger.info(f"User {message.from_user.id} requested referral info")
+    user_id = message.from_user.id
+    logger.info(f"User {user_id} requested referral info")
 
     # Delete command message
     try:
@@ -220,24 +248,53 @@ async def ref_command(message: Message) -> None:
     except Exception as e:
         logger.warning(f"Could not delete /ref command: {e}")
 
-    # TODO: Get referral stats via GetReferralStatsUseCase
-    # TODO: Generate referral link
-    text = (
-        "👥 <b>Партнёрская программа</b>\n\n"
-        "Зарабатывайте на рекомендациях!\n\n"
-        "💰 <b>Условия:</b>\n"
-        "• 5% от каждой покупки по вашей ссылке\n"
-        "• Выплаты от 1000₽\n"
-        "• Пожизненные отчисления\n\n"
-        "📊 <b>Ваша статистика:</b>\n"
-        "• Рефералов: 0\n"
-        "• Заработано: 0.00₽\n\n"
-        "🔗 <b>Ваш реферальный код:</b> <code>REF123</code>\n"
-        "🔗 <b>Ваша реферальная ссылка:</b>\n<code>https://t.me/bot?start=REF123</code>\n\n"
-        "💡 Отправьте ссылку друзьям, и получайте 5% от их первого платежа!"
-    )
+    # Get use cases
+    container = get_container()
+    use_cases = container.get_use_cases()
 
-    await message.answer(text)
+    try:
+        # Generate referral code if doesn't exist
+        from src.application.referral.dtos import GenerateReferralCodeDTO
+        dto = GenerateReferralCodeDTO(user_id=user_id)
+        await use_cases.generate_referral_code.execute(dto)
+        
+        # Get referral stats
+        stats = await use_cases.get_referral_stats.execute(user_id)
+        
+        # Get referral link
+        link = await use_cases.get_referral_link.execute(user_id)
+        
+        text = (
+            "👥 <b>Партнёрская программа</b>\n\n"
+            "Зарабатывайте на рекомендациях!\n\n"
+            "💰 <b>Условия:</b>\n"
+            "• 5% от каждой покупки по вашей ссылке\n"
+            "• Выплаты от 1000₽\n"
+            "• Пожизненные отчисления\n\n"
+            "📊 <b>Ваша статистика:</b>\n"
+            f"• Рефералов: {stats.total_referrals}\n"
+            f"• Активных: {stats.active_referrals}\n"
+            f"• Заработано: {stats.total_earned:.2f}₽\n"
+            f"• Доступно: {stats.available_balance:.2f}₽\n\n"
+            f"🔗 <b>Ваш реферальный код:</b> <code>{link.referral_code}</code>\n"
+            f"🔗 <b>Ваша реферальная ссылка:</b>\n<code>{link.referral_link}</code>\n\n"
+            "💡 Отправьте ссылку друзьям, и получайте 5% от их первого платежа!"
+        )
+        
+        await message.answer(text, parse_mode="HTML")
+        
+    except Exception as e:
+        logger.error(f"Error getting referral info for user {user_id}: {e}")
+        text = (
+            "👥 <b>Партнёрская программа</b>\n\n"
+            "Зарабатывайте на рекомендациях!\n\n"
+            "💰 <b>Условия:</b>\n"
+            "• 5% от каждой покупки по вашей ссылке\n"
+            "• Выплаты от 1000₽\n"
+            "• Пожизненные отчисления\n\n"
+            "❌ Не удалось загрузить статистику. Попробуйте позже."
+        )
+        await message.answer(text, parse_mode="HTML")
 
 
 async def support_command(message: Message) -> None:

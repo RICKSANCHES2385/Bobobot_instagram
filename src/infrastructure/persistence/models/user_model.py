@@ -47,6 +47,18 @@ class UserModel(Base):
     # Relationships
     subscriptions = relationship("SubscriptionModel", back_populates="user")
     payments = relationship("PaymentModel", back_populates="user")
+    referral = relationship(
+        "ReferralModel",
+        foreign_keys="ReferralModel.referrer_user_id",
+        back_populates="referrer",
+        uselist=False,
+    )
+    referred_by = relationship(
+        "ReferralModel",
+        foreign_keys="ReferralModel.referred_user_id",
+        back_populates="referred_user",
+        uselist=False,
+    )
 
     def __repr__(self) -> str:
         """String representation."""
