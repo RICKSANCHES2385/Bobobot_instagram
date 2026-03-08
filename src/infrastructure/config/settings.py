@@ -39,6 +39,12 @@ class Settings(BaseSettings):
         description="HikerAPI base URL"
     )
 
+    # CryptoBot
+    cryptobot_token: str = Field(
+        default="",
+        description="CryptoBot API token (optional)"
+    )
+
     # Rate Limiting
     rate_limit_requests_per_minute: int = Field(
         default=10,

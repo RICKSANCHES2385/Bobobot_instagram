@@ -34,6 +34,8 @@ from src.application.payment.use_cases.create_payment import CreatePaymentUseCas
 from src.application.payment.use_cases.process_payment import ProcessPaymentUseCase
 from src.application.payment.use_cases.complete_payment import CompletePaymentUseCase
 from src.application.payment.use_cases.get_payment_status import GetPaymentStatusUseCase
+from src.application.payment.use_cases.create_cryptobot_invoice import CreateCryptoBotInvoiceUseCase
+from src.application.payment.use_cases.check_cryptobot_payment import CheckCryptoBotPaymentUseCase
 
 from src.application.notification.use_cases.create_notification import CreateNotificationUseCase
 from src.application.notification.use_cases.send_notification import SendNotificationUseCase
@@ -65,6 +67,7 @@ from src.infrastructure.persistence.repositories.sqlalchemy_referral_repository 
 
 from src.infrastructure.external_services.hiker_api.hiker_api_adapter import HikerAPIAdapter
 from src.infrastructure.messaging.telegram_notification_sender import TelegramNotificationSender
+from src.infrastructure.payment.adapters.cryptobot_adapter import CryptoBotAdapter
 
 
 @dataclass
@@ -104,6 +107,8 @@ class UseCaseContainer:
     process_payment: ProcessPaymentUseCase
     complete_payment: CompletePaymentUseCase
     get_payment_status: GetPaymentStatusUseCase
+    create_cryptobot_invoice: CreateCryptoBotInvoiceUseCase
+    check_cryptobot_payment: CheckCryptoBotPaymentUseCase
     
     # Notification
     create_notification: CreateNotificationUseCase
@@ -135,10 +140,12 @@ class DependencyContainer:
         session_factory: async_sessionmaker[AsyncSession],
         hiker_api_key: str,
         telegram_bot_token: str,
+        cryptobot_token: Optional[str] = None,
     ):
         self.session_factory = session_factory
         self.hiker_api_key = hiker_api_key
         self.telegram_bot_token = telegram_bot_token
+        self.cryptobot_token = cryptobot_token
         self._use_cases: Optional[UseCaseContainer] = None
     
     async def get_session(self) -> AsyncSession:
@@ -217,6 +224,18 @@ class DependencyContainer:
         # Inject referral reward processing (will be set after creating process_referral_reward)
         complete_payment.process_referral_reward_use_case = None  # Will be set below
         get_payment_status = GetPaymentStatusUseCase(payment_repository=payment_repo)
+        
+        # CryptoBot Payment Use Cases (optional)
+        create_cryptobot_invoice = None
+        check_cryptobot_payment = None
+        if self.cryptobot_token:
+            cryptobot_adapter = CryptoBotAdapter(api_token=self.cryptobot_token)
+            create_cryptobot_invoice = CreateCryptoBotInvoiceUseCase(
+                cryptobot_adapter=cryptobot_adapter
+            )
+            check_cryptobot_payment = CheckCryptoBotPaymentUseCase(
+                cryptobot_adapter=cryptobot_adapter
+            )
         
         # Notification Use Cases
         create_notification = CreateNotificationUseCase(notification_repository=notification_repo)
@@ -300,6 +319,8 @@ class DependencyContainer:
             process_payment=process_payment,
             complete_payment=complete_payment,
             get_payment_status=get_payment_status,
+            create_cryptobot_invoice=create_cryptobot_invoice,
+            check_cryptobot_payment=check_cryptobot_payment,
             # Notification
             create_notification=create_notification,
             send_notification=send_notification,
@@ -329,6 +350,7 @@ def init_container(
     session_factory: async_sessionmaker[AsyncSession],
     hiker_api_key: str,
     telegram_bot_token: str,
+    cryptobot_token: Optional[str] = None,
 ) -> DependencyContainer:
     """Initialize global dependency container."""
     global _container
@@ -336,6 +358,7 @@ def init_container(
         session_factory=session_factory,
         hiker_api_key=hiker_api_key,
         telegram_bot_token=telegram_bot_token,
+        cryptobot_token=cryptobot_token,
     )
     return _container
 

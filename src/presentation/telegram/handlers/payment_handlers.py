@@ -558,26 +558,25 @@ async def crypto_buy_callback(callback: CallbackQuery) -> None:
         await callback.answer("❌ Ошибка данных", show_alert=True)
         return
 
-    currency = parts[1]
-    plan_code = parts[3]
+    currency = parts[1]  # ton or usdt
+    plan_code = parts[3]  # 1m, 3m, 6m, 12m
+    user_id = callback.from_user.id
 
-    logger.info(f"User {callback.from_user.id} selected {currency} plan {plan_code}")
+    logger.info(f"User {user_id} selected {currency} plan {plan_code}")
 
-    # TODO: Create CryptoBot invoice
-    # TODO: Call CreatePaymentUseCase
-
+    # Plan definitions
     plans_ton = {
-        "1m": {"name": "1 месяц", "price": "5 TON"},
-        "3m": {"name": "3 месяца", "price": "13 TON"},
-        "6m": {"name": "6 месяцев", "price": "25 TON"},
-        "12m": {"name": "1 год", "price": "42 TON"},
+        "1m": {"name": "1 месяц", "price": 5.0, "days": 30},
+        "3m": {"name": "3 месяца", "price": 13.0, "days": 90},
+        "6m": {"name": "6 месяцев", "price": 25.0, "days": 180},
+        "12m": {"name": "1 год", "price": 42.0, "days": 365},
     }
 
     plans_usdt = {
-        "1m": {"name": "1 месяц", "price": "$5"},
-        "3m": {"name": "3 месяца", "price": "$13"},
-        "6m": {"name": "6 месяцев", "price": "$25"},
-        "12m": {"name": "1 год", "price": "$42"},
+        "1m": {"name": "1 месяц", "price": 5.0, "days": 30},
+        "3m": {"name": "3 месяца", "price": 13.0, "days": 90},
+        "6m": {"name": "6 месяцев", "price": 25.0, "days": 180},
+        "12m": {"name": "1 год", "price": 42.0, "days": 365},
     }
 
     plans = plans_ton if currency == "ton" else plans_usdt
@@ -587,25 +586,65 @@ async def crypto_buy_callback(callback: CallbackQuery) -> None:
         await callback.answer("❌ Неверный тариф", show_alert=True)
         return
 
-    text = (
-        f"🤖 <b>Подписка Безлимит - {plan['name']}</b>\n\n"
-        f"💰 Цена: {plan['price']}\n\n"
-        "Нажмите кнопку ниже для создания счета"
-    )
-
-    # TODO: Generate real CryptoBot invoice link
-    invoice_url = f"https://t.me/CryptoBot?start=invoice_{plan_code}"
-
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"💳 Оплатить {plan['price']}", url=invoice_url)],
-        [InlineKeyboardButton(text="🔄 Проверить оплату", callback_data=f"crypto_check_{currency}_{plan_code}")],
-        [InlineKeyboardButton(text="◀️ Назад", callback_data=f"crypto_{currency}")]
-    ])
-
     try:
-        await callback.message.edit_text(text, reply_markup=keyboard)
-    except Exception:
-        await callback.message.answer(text, reply_markup=keyboard)
+        # Get use cases
+        container = get_container()
+        use_cases = container.get_use_cases()
+        
+        # Map currency to Currency value object
+        from src.domain.payment.value_objects.currency import Currency
+        currency_vo = Currency.ton() if currency == "ton" else Currency.usdt()
+        
+        # Create CryptoBot invoice
+        from src.application.payment.use_cases.create_cryptobot_invoice import (
+            CreateCryptoBotInvoiceRequest
+        )
+        
+        request = CreateCryptoBotInvoiceRequest(
+            user_id=user_id,
+            plan_code=plan_code,
+            currency=currency_vo,
+            amount=plan['price'],
+            description=f"Подписка Безлимит - {plan['name']}",
+            expires_in=3600  # 1 hour
+        )
+        
+        response = await use_cases.create_cryptobot_invoice.execute(request)
+        
+        if response.success and response.invoice_id:
+            text = (
+                f"✅ <b>Счет создан!</b>\n\n"
+                f"💎 <b>{plan['name']}</b>\n"
+                f"💰 Сумма: {response.amount} {response.asset}\n"
+                f"⏰ Действителен: 1 час\n\n"
+                "Нажмите кнопку ниже для оплаты"
+            )
+
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(
+                    text=f"💳 Оплатить {response.amount} {response.asset}",
+                    url=response.pay_url
+                )],
+                [InlineKeyboardButton(
+                    text="🔄 Проверить оплату",
+                    callback_data=f"crypto_check_{response.invoice_id}"
+                )],
+                [InlineKeyboardButton(text="◀️ Назад", callback_data=f"crypto_{currency}")]
+            ])
+
+            try:
+                await callback.message.edit_text(text, reply_markup=keyboard)
+            except Exception:
+                await callback.message.answer(text, reply_markup=keyboard)
+        else:
+            await callback.answer(
+                f"❌ Ошибка создания счета: {response.error_message}",
+                show_alert=True
+            )
+            
+    except Exception as e:
+        logger.error(f"Error creating CryptoBot invoice: {e}")
+        await callback.answer("❌ Ошибка создания счета", show_alert=True)
 
 
 async def crypto_check_payment(callback: CallbackQuery) -> None:
@@ -615,21 +654,134 @@ async def crypto_check_payment(callback: CallbackQuery) -> None:
 
     await callback.answer("Проверяю статус оплаты...")
 
-    # Parse: crypto_check_{currency}_{plan_code}
-    parts = callback.data.split("_", 3)
-    if len(parts) < 4:
+    # Parse: crypto_check_{invoice_id}
+    parts = callback.data.split("_", 2)
+    if len(parts) < 3:
         await callback.answer("❌ Ошибка данных", show_alert=True)
         return
 
-    currency = parts[2]
-    plan_code = parts[3]
+    invoice_id = int(parts[2])
+    user_id = callback.from_user.id
 
-    logger.info(f"Checking crypto payment status for user {callback.from_user.id}")
+    logger.info(f"Checking CryptoBot payment {invoice_id} for user {user_id}")
 
-    # TODO: Check payment status via CryptoBot API
-    # TODO: If paid, activate subscription
+    try:
+        # Get use cases
+        container = get_container()
+        use_cases = container.get_use_cases()
+        
+        # Check payment status
+        from src.application.payment.use_cases.check_cryptobot_payment import (
+            CheckCryptoBotPaymentRequest
+        )
+        
+        request = CheckCryptoBotPaymentRequest(invoice_id=invoice_id)
+        response = await use_cases.check_cryptobot_payment.execute(request)
+        
+        if not response.success:
+            await callback.answer(
+                f"❌ Ошибка: {response.error_message}",
+                show_alert=True
+            )
+            return
+        
+        if response.paid:
+            # Process payment
+            await _process_cryptobot_payment(
+                callback,
+                invoice_id,
+                response.payload,
+                response.amount,
+                response.asset
+            )
+        elif response.status == "expired":
+            await callback.answer(
+                "⏰ Счет истек. Создайте новый счет.",
+                show_alert=True
+            )
+        else:
+            await callback.answer(
+                "⏳ Оплата еще не получена",
+                show_alert=True
+            )
+            
+    except Exception as e:
+        logger.error(f"Error checking CryptoBot payment: {e}")
+        await callback.answer("❌ Ошибка проверки платежа", show_alert=True)
 
-    await callback.answer("⏳ Оплата еще не получена", show_alert=True)
+
+async def _process_cryptobot_payment(
+    callback: CallbackQuery,
+    invoice_id: int,
+    payload: str,
+    amount: str,
+    asset: str
+) -> None:
+    """Process successful CryptoBot payment."""
+    if not callback.from_user:
+        return
+    
+    user_id = callback.from_user.id
+    
+    try:
+        # Parse payload: user_{user_id}_plan_{plan_code}_{currency}
+        parts = payload.split("_")
+        if len(parts) < 5:
+            logger.error(f"Invalid payload format: {payload}")
+            await callback.answer("❌ Ошибка обработки платежа", show_alert=True)
+            return
+        
+        plan_code = parts[3]
+        
+        # Get use cases
+        container = get_container()
+        use_cases = container.get_use_cases()
+        
+        # Plan mapping
+        plans = {
+            "1m": {"name": "1 месяц", "days": 30},
+            "3m": {"name": "3 месяца", "days": 90},
+            "6m": {"name": "6 месяцев", "days": 180},
+            "12m": {"name": "1 год", "days": 365},
+        }
+        
+        plan = plans.get(plan_code)
+        if not plan:
+            logger.error(f"Invalid plan code: {plan_code}")
+            await callback.answer("❌ Ошибка обработки платежа", show_alert=True)
+            return
+        
+        # Create subscription
+        from src.application.subscription.dtos import CreateSubscriptionCommand
+        
+        sub_command = CreateSubscriptionCommand(
+            user_id=user_id,
+            subscription_type="premium",
+            days=plan['days'],
+            price=float(amount)
+        )
+        
+        subscription = await use_cases.create_subscription.execute(sub_command)
+        
+        text = (
+            "✅ <b>Оплата успешна!</b>\n\n"
+            f"💰 Получено: {amount} {asset}\n"
+            f"🎉 Подписка активирована на {plan['days']} дней\n"
+            f"💎 Тип: {plan['name']}\n"
+            f"⏰ Активна до: {subscription.end_date.strftime('%d.%m.%Y')}\n\n"
+            "Спасибо за покупку! 🙏"
+        )
+        
+        await callback.message.edit_text(text)
+        
+        logger.info(
+            f"Activated subscription for user {user_id} "
+            f"via CryptoBot payment {invoice_id}"
+        )
+        
+    except Exception as e:
+        logger.error(f"Error processing CryptoBot payment: {e}")
+        await callback.answer("❌ Ошибка обработки платежа", show_alert=True)
 
 
 # Tariffs menu

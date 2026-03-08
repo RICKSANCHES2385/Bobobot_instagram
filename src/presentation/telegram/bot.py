@@ -92,6 +92,7 @@ class TelegramBot:
             session_factory=self.session_factory,
             hiker_api_key=self.settings.hikerapi_key,
             telegram_bot_token=self.settings.telegram_bot_token,
+            cryptobot_token=self.settings.cryptobot_token if self.settings.cryptobot_token else None,
         )
         logger.info("Dependency container initialized")
     
